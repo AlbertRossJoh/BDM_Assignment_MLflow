@@ -60,6 +60,7 @@ def _(mo):
 def _():
     # Cell tags: imports
     import mlflow
+    from mlflow.tracking import MlflowClient
 
     # You will probably need these
     import pandas as pd
@@ -73,22 +74,34 @@ def _():
     from sklearn.linear_model import LinearRegression
     from sklearn.model_selection import train_test_split, TimeSeriesSplit
     from sklearn.metrics import mean_absolute_error
+    from sklearn.base import clone
     from mlflow.models import infer_signature
     from urllib.parse import urlparse
 
+
     ### TODO -> HERE YOU CAN ADD ANY OTHER LIBRARIES YOU MAY NEED ###
     import polars as pl
+    import mlflow
+    import mlflow.sklearn
+    from mlflow.tracking import MlflowClient
+    from sklearn.base import clone
+    from sklearn.model_selection import TimeSeriesSplit
+    from sklearn.metrics import r2_score
 
     return (
         LinearRegression,
+        MlflowClient,
         Pipeline,
         StandardScaler,
+        TimeSeriesSplit,
+        clone,
         mean_absolute_error,
         mlflow,
         np,
         pd,
         pl,
         plt,
+        r2_score,
         train_test_split,
     )
 
@@ -173,13 +186,13 @@ def _(mo):
 def _(power_df):
     ### TODO -> REMOVE UNNECESSARY COLUMNS ###
     power_df_select = power_df.select(["time","Total"])
+    power_df_select
     return (power_df_select,)
 
 
 @app.cell
 def _(wind_df):
     wind_df_needed_columns = wind_df.select(["time", "Direction", "Speed"])
-    wind_df_needed_columns
     return (wind_df_needed_columns,)
 
 
@@ -235,11 +248,12 @@ def _(mo):
 @app.cell
 def _(pl, power_df_select, wind_df_needed_columns):
     ### TODO -> JOIN THE TWO DATASETS ###
-    hours_intervals = [0, 3, 6, 9, 12, 15, 18, 21]
-    wind_df_upsampled = wind_df_needed_columns.upsample(time_column="time", every='1h').with_columns(pl.col("Direction").fill_null(strategy="forward"), pl.col("Speed").fill_null(strategy="forward"))
-    power_df_downsampled = power_df_select.with_columns(pl.col("time").dt.round("1h"))
-    joined_dfs = power_df_downsampled.join(wind_df_upsampled, how="inner", on="time")
-    return (joined_dfs,)
+    def resample(granularity="1h"):
+        wind_df_upsampled = wind_df_needed_columns.upsample(time_column="time", every=granularity).with_columns(pl.col("Direction").fill_null(strategy="forward"), pl.col("Speed").fill_null(strategy="forward"))
+        power_df_downsampled = power_df_select.with_columns(pl.col("time").dt.round(granularity))
+        return power_df_downsampled.join(wind_df_upsampled, how="inner", on="time")
+    joined_dfs = resample()
+    return joined_dfs, resample
 
 
 @app.cell(hide_code=True)
@@ -381,7 +395,7 @@ def _(LinearRegression, Pipeline, StandardScaler):
         ("Scaler", StandardScaler()),
         ("Linear Regression", LinearRegression())
     ])
-    return
+    return (pipeline,)
 
 
 @app.cell(hide_code=True)
@@ -397,18 +411,25 @@ def _(mo):
 
 
 @app.cell
-def _(joined_dfs, mean_absolute_error, pipeline_example, train_test_split):
-    #joined_dfs_1 = power_df.join(wind_df).dropna()
+def _(joined_dfs):
     joined_dfs_1 = joined_dfs
     X = joined_dfs_1.select('Speed')
     y = joined_dfs_1.select('Total')
-    X_train, X_test, y_train, y_test = train_test_split(X, y, shuffle=False)
-    model = pipeline_example.fit(X_train, y_train)
+    return X, y
 
-    _mae = mean_absolute_error(pipeline_example.predict(X_test), y_test)
-    print(_mae)
-    model.score(X_test, y_test)
-    return X_test, X_train, y_test, y_train
+
+@app.cell
+def _(X, mean_absolute_error, pipeline_example, train_test_split, y):
+    #joined_dfs_1 = power_df.join(wind_df).dropna()
+    def regular_train_test_split():
+        X_train, X_test, y_train, y_test = train_test_split(X, y, shuffle=False)
+        model = pipeline_example.fit(X_train, y_train)
+
+        _mae = mean_absolute_error(pipeline_example.predict(X_test), y_test)
+        print(_mae)
+        model.score(X_test, y_test)
+    regular_train_test_split()
+    return
 
 
 @app.cell(hide_code=True)
@@ -420,13 +441,13 @@ def _(mo):
 
 
 @app.cell
-def _(X_test, np, pipeline_example, plt, y_test):
-    _predictions = pipeline_example.predict(X_test)
-    plt.figure(figsize=(15, 4))
-    plt.plot(np.arange(len(_predictions)), _predictions, label='Predictions')
-    plt.plot(np.arange(len(y_test)), y_test, label='Truth')
-    plt.legend()
-    plt.show()
+def _():
+    #_predictions = pipeline.predict(X_test)
+    #plt.figure(figsize=(15, 4))
+    #plt.plot(np.arange(len(_predictions)), _predictions, label='Predictions')
+    #plt.plot(np.arange(len(y_test)), y_test, label='Truth')
+    #plt.legend()
+    #plt.show()
     return
 
 
@@ -442,6 +463,29 @@ def _(mo):
 def _():
     # Use your preferred method to evaluate your model
     ### TODO -> SPLIT THE DATA INTO TRAIN AND TEST SETS, AND EVALUATE YOUR MODEL ###
+    return
+
+
+@app.cell
+def _(TimeSeriesSplit, X, mean_absolute_error, pipeline, y):
+    def time_series_split():
+        tscv = TimeSeriesSplit(n_splits=5)
+
+        mae_scores = []
+
+        for fold, (train_idx, test_idx) in enumerate(tscv.split(X)):
+            X_train, y_train = X[train_idx], y[train_idx]
+            X_test, y_test = X[test_idx], y[test_idx]
+
+            pipeline.fit(X_train, y_train)
+
+            y_pred = pipeline.predict(X_test)
+            score = mean_absolute_error(y_test, y_pred)
+            mae_scores.append(score)
+            accurracy = pipeline.score(X_test, y_test)
+
+            print(f"Fold {fold + 1} MAE: {score:.4f} Accurracy: {accurracy*100:.2f}%")
+    #time_series_split()
     return
 
 
@@ -468,27 +512,19 @@ def _(mo):
 
 
 @app.cell
-def _(
-    X_test,
-    X_train,
-    mean_absolute_error,
-    mlflow,
-    pipeline_example,
-    y_test,
-    y_train,
-):
-    # Start an MLflow run
+def _(mlflow):
+    ## Start an MLflow run
     mlflow.sklearn.autolog()  # This is to help us track scikit learn metrics.
     mlflow.set_tracking_uri('http://127.0.0.1:5000')  # We set the MLFlow UI to display in our local host.
-    experiment_name = 'LinearRegression-Example'
-    # Set the experiment and run name
-    run_name = 'Simple_regression'  # Think how to best organise experiments - for example by model type
-    mlflow.set_experiment(experiment_name)  # Give explicit names 
-    with mlflow.start_run(run_name=run_name) as run:
-        pipeline_example.fit(X_train, y_train)
-        _predictions = pipeline_example.predict(X_test)
-        _mae = mean_absolute_error(_predictions, y_test)
-        mlflow.log_metric('MAE', _mae)  # Train our model  # Evaluate the model, using MAE as a metric
+    #experiment_name = 'LinearRegression-Example'
+    ## Set the experiment and run name
+    #run_name = 'Simple_regression'  # Think how to best organise experiments - for example by model type
+    #mlflow.set_experiment(experiment_name)  # Give explicit names 
+    #with mlflow.start_run(run_name=run_name) as run:
+    #    pipeline.fit(X_train, y_train)
+    #    _predictions = pipeline.predict(X_test)
+    #    _mae = mean_absolute_error(_predictions, y_test)
+    #    mlflow.log_metric('MAE', _mae)  # Train our model  # Evaluate the model, using MAE as a metric
     return
 
 
@@ -521,10 +557,336 @@ def _(mo):
 
 
 @app.cell
-def _():
-    ### TODO -> SET YOUR OWN EXPERIMENT SETUP ###
-    # Here, you may want to stop and think what is the best way to iterate(!) through all the models and experiments you want to try. 
-    # Instead of running your code everytime you want to change something, you could try to list all your desired experiments and run them all sequentially in one go (gridsearch style).
+def _(mlflow):
+    def already_run(experiment_name, run_name):
+        experiment = mlflow.get_experiment_by_name(experiment_name)
+        if experiment is None:
+            return False
+        runs = mlflow.search_runs(
+            experiment_ids=[experiment.experiment_id],
+            filter_string=f"tags.mlflow.runName = '{run_name}'"
+        )
+        return not runs.empty
+
+    return (already_run,)
+
+
+@app.cell
+def _(
+    X,
+    already_run,
+    mean_absolute_error,
+    mlflow,
+    pipeline,
+    train_test_split,
+    y,
+):
+    def regular_split():
+        experiment_name = "Regular split experiment"
+        run_name = 'Simple_regression'
+        if already_run(experiment_name, run_name):
+            return
+        mlflow.set_experiment(experiment_name)
+        X_train, X_test, y_train, y_test = train_test_split(X, y, shuffle=False)
+
+        with mlflow.start_run(run_name=f"Regular split") as run:
+            model = pipeline.fit(X_train, y_train)
+    
+            _mae = mean_absolute_error(pipeline.predict(X_test), y_test)
+            accurracy = model.score(X_test, y_test)
+            mlflow.log_metric('MAE', _mae)
+            mlflow.log_metric('accurracy', accurracy)
+    regular_split()
+
+    return
+
+
+@app.cell
+def _(
+    MlflowClient,
+    TimeSeriesSplit,
+    X,
+    already_run,
+    clone,
+    mean_absolute_error,
+    mlflow,
+    np,
+    pd,
+    pipeline,
+    plt,
+    r2_score,
+    y,
+):
+    def _index(arr, idx):
+        """Positional row selection that works for ndarrays, DataFrames, and Series."""
+        return arr.iloc[idx] if hasattr(arr, "iloc") else arr[idx]
+
+
+    def _flat_hyperparams(estimator):
+        """Only scalar/JSON-friendly hyperparameters — drop nested estimator/transformer objects."""
+        return {
+            k: v
+            for k, v in estimator.get_params(deep=True).items()
+            if not hasattr(v, "get_params")
+        }
+
+
+    def mlflow_timeseriessplit(
+        X,
+        y,
+        pipeline,
+        experiment,
+        run_name,
+        *,
+        train_transform=None,
+        n_splits=5,
+        registered_model_name=None,
+    ):
+        if already_run(experiment, run_name):
+            return
+
+        mlflow.set_experiment(experiment)
+        tscv = TimeSeriesSplit(n_splits=n_splits)
+        client = MlflowClient()
+        registered_model_name = registered_model_name or f"{run_name}_pipeline"
+
+        fold_results = []
+
+        with mlflow.start_run(run_name=run_name) as parent_run:
+            mlflow.log_param("n_splits", n_splits)
+            mlflow.log_params(_flat_hyperparams(pipeline))
+
+            for fold, (train_idx, test_idx) in enumerate(tscv.split(X)):
+                X_train, y_train = _index(X, train_idx), _index(y, train_idx)
+                X_test, y_test = _index(X, test_idx), _index(y, test_idx)
+
+                if train_transform is not None:
+                    X_train, y_train = train_transform(X_train, y_train)
+
+                fold_pipeline = clone(pipeline)
+
+                with mlflow.start_run(run_name=f"fold_{fold}", nested=True) as run:
+                    mlflow.set_tags({"fold": fold, "cv_strategy": "TimeSeriesSplit"})
+
+                    fold_pipeline.fit(X_train, y_train)
+                    y_pred = fold_pipeline.predict(X_test)
+
+                    y_true_np = np.asarray(y_test).ravel()
+                    y_pred_np = np.asarray(y_pred).ravel()
+                
+                    fig, ax = plt.subplots(figsize=(15, 4))
+                    ax.plot(np.arange(len(y_pred_np)), y_pred_np, label="Predictions")
+                    ax.plot(np.arange(len(y_true_np)), y_true_np, label="Truth")
+                    ax.legend()
+                    ax.set_title(f"Fold {fold}: Predictions vs Truth")
+                
+                    mlflow.log_figure(fig, f"predictions_vs_truth_fold_{fold}.png")
+                    plt.close(fig)
+
+                    mae = mean_absolute_error(y_test, y_pred)
+                    r2 = r2_score(y_test, y_pred)
+
+                    mlflow.log_metrics({"mae": mae, "r2": r2})
+                    # also log on the parent run, keyed by step, for a fold-over-fold chart
+                    mlflow.log_metric("fold_mae", mae, step=fold)
+                    mlflow.log_metric("fold_r2", r2, step=fold)
+
+                    mlflow.sklearn.log_model(fold_pipeline, "model", serialization_format="cloudpickle") 
+                    print(f"Fold {fold + 1} MAE: {mae:.4f}  R²: {r2:.4f}")
+
+                    fold_results.append((fold, mae, r2, run.info.run_id))
+
+            mae_scores = [r[1] for r in fold_results]
+            r2_scores = [r[2] for r in fold_results]
+
+            for prefix, scores in [("mae", mae_scores), ("r2", r2_scores)]:
+                stats = pd.Series(scores).describe()
+                mlflow.log_metrics(
+                    {
+                        f"{prefix}_{name.replace('%', 'pct')}": value
+                        for name, value in stats.items()
+                        if name != "count"
+                    }
+                )
+
+            best_fold, best_mae, best_r2, best_run_id = min(fold_results, key=lambda r: r[1])
+            mlflow.log_metric("mae_best", best_mae)
+            mlflow.set_tag("best_fold", best_fold)
+
+            model_info = mlflow.register_model(
+                model_uri=f"runs:/{best_run_id}/model",
+                name=registered_model_name,
+            )
+            client.update_model_version(
+                name=registered_model_name,
+                version=model_info.version,
+                description=f"Best fold {best_fold} — MAE={best_mae:.4f}, R²={best_r2:.4f}",
+            )
+            client.set_model_version_tag(registered_model_name, model_info.version, "fold", str(best_fold))
+            client.set_model_version_tag(
+                registered_model_name, model_info.version, "source_run_id", best_run_id
+            )
+
+        return mae_scores, best_fold, best_mae
+    mlflow_timeseriessplit(X, y, pipeline, "Time Series Split Experiment","TSCV_parent")
+    return (mlflow_timeseriessplit,)
+
+
+@app.cell
+def _(np):
+
+    def remove_outliers_tukey(X_train, y_train, k: float = 1.5):
+        X_train = np.asarray(X_train)
+        y_train = np.asarray(y_train)
+
+        Q1 = np.percentile(X_train, 25, axis=0)
+        Q3 = np.percentile(X_train, 75, axis=0)
+        IQR = Q3 - Q1
+        lower, upper = Q1 - k * IQR, Q3 + k * IQR
+
+        mask = ((X_train >= lower) & (X_train <= upper)).all(axis=1)
+        return X_train[mask], y_train[mask]
+
+    return (remove_outliers_tukey,)
+
+
+@app.cell
+def _(X, mlflow_timeseriessplit, pipeline, remove_outliers_tukey, y):
+    mlflow_timeseriessplit(X, y, pipeline, "Remove Outliers Experiment","Outliers parent", train_transform=remove_outliers_tukey)
+    return
+
+
+@app.cell
+def _(
+    LinearRegression,
+    Pipeline,
+    X,
+    mlflow_timeseriessplit,
+    remove_outliers_tukey,
+    y,
+):
+
+    from sklearn.preprocessing import MaxAbsScaler
+    pipeline_maxabsscaler = Pipeline([
+        ("MaxScaling", MaxAbsScaler()),
+        ("Linear Regression", LinearRegression())
+    ])
+
+    mlflow_timeseriessplit(X, y, pipeline_maxabsscaler, "Max abs scaling","Max scaling", train_transform=remove_outliers_tukey)
+    return
+
+
+@app.cell
+def _(LinearRegression, Pipeline, X, mlflow_timeseriessplit, y):
+    from sklearn.preprocessing import RobustScaler
+    pipeline_robust = Pipeline([
+        ("MaxScaling", RobustScaler()),
+        ("Linear Regression", LinearRegression())
+    ])
+
+    mlflow_timeseriessplit(X, y, pipeline_robust, "Robust scaling","Robust scaling")
+    return
+
+
+@app.cell
+def _(
+    LinearRegression,
+    Pipeline,
+    StandardScaler,
+    joined_dfs,
+    mlflow_timeseriessplit,
+    pl,
+    y,
+):
+    from sklearn.preprocessing import FunctionTransformer
+    from sklearn.compose import ColumnTransformer
+
+    COMPASS_16 = ["N","NNE","NE","ENE","E","ESE","SE","SSE",
+                  "S","SSW","SW","WSW","W","WNW","NW","NNW"]
+    DIR_TO_DEG = {d: i * 22.5 for i, d in enumerate(COMPASS_16)}
+
+    def add_cyclic_direction(df, col="Direction"):
+        deg = df[col].replace(DIR_TO_DEG).cast(pl.Float64)
+        rad = deg.radians()
+        return df.with_columns(
+            direction_sin=rad.sin(),
+            direction_cos=rad.cos(),
+        ).drop(col)
+
+    X_with_dir = joined_dfs.select(["Speed", "Direction"])
+    X_with_dir = add_cyclic_direction(X_with_dir)
+
+    pipeline_with_dir = Pipeline([
+        ("Scaling", StandardScaler()),
+        ("Linear Regression", LinearRegression())
+    ])
+
+    mlflow_timeseriessplit(X_with_dir, y, pipeline_with_dir, "Direction encoding","Direction encoding")
+
+    return X_with_dir, add_cyclic_direction
+
+
+@app.cell
+def _(Pipeline, StandardScaler, X_with_dir, mlflow_timeseriessplit, y):
+    from sklearn.ensemble import HistGradientBoostingRegressor
+    pipeline_gradient_boosting = Pipeline([
+        ("Scaling", StandardScaler()),
+        ("Gradient boosting", HistGradientBoostingRegressor())
+    ])
+
+    mlflow_timeseriessplit(X_with_dir, y, pipeline_gradient_boosting, "Direction encoding","Gradient boosting")
+    return HistGradientBoostingRegressor, pipeline_gradient_boosting
+
+
+@app.cell
+def _(Pipeline, StandardScaler, X_with_dir, mlflow_timeseriessplit, y):
+    from sklearn.ensemble import RandomForestRegressor
+    pipeline_random_forest = Pipeline([
+        ("Scaling", StandardScaler()),
+        ("Random forest", RandomForestRegressor())
+    ])
+
+    mlflow_timeseriessplit(X_with_dir, y, pipeline_random_forest, "Direction encoding", "Random forest")
+    return
+
+
+@app.cell
+def _(
+    HistGradientBoostingRegressor,
+    Pipeline,
+    StandardScaler,
+    X_with_dir,
+    mlflow_timeseriessplit,
+    y,
+):
+    pipeline_gradient_boosting_tuned = Pipeline([
+        ("Scaling", StandardScaler()),
+        ("Gradient boosting", HistGradientBoostingRegressor(
+                max_leaf_nodes=63,
+                min_samples_leaf=5,
+                max_iter=100,
+        ))
+    ])
+
+    mlflow_timeseriessplit(X_with_dir, y, pipeline_gradient_boosting_tuned, "Direction encoding","Gradient boosting tuned")
+    return (pipeline_gradient_boosting_tuned,)
+
+
+@app.cell
+def _(
+    add_cyclic_direction,
+    mlflow_timeseriessplit,
+    pipeline_gradient_boosting,
+    pipeline_gradient_boosting_tuned,
+    resample,
+):
+    joined_dfs_minute = resample('1m')
+    y_min = joined_dfs_minute.select('Total')
+    X_with_dir_min = joined_dfs_minute.select(["Speed", "Direction"])
+    X_with_dir_min = add_cyclic_direction(X_with_dir_min)
+
+    mlflow_timeseriessplit(X_with_dir_min, y_min, pipeline_gradient_boosting_tuned, "Minute granularity","Gradient boosting tuned")
+    mlflow_timeseriessplit(X_with_dir_min, y_min, pipeline_gradient_boosting, "Direction encoding","Gradient boosting minute")
     return
 
 
