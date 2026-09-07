@@ -78,7 +78,6 @@ def _():
     from mlflow.models import infer_signature
     from urllib.parse import urlparse
 
-
     ### TODO -> HERE YOU CAN ADD ANY OTHER LIBRARIES YOU MAY NEED ###
     import polars as pl
     import mlflow
@@ -87,8 +86,10 @@ def _():
     from sklearn.base import clone
     from sklearn.model_selection import TimeSeriesSplit
     from sklearn.metrics import r2_score
+    from sklearn.ensemble import HistGradientBoostingRegressor
 
     return (
+        HistGradientBoostingRegressor,
         LinearRegression,
         MlflowClient,
         Pipeline,
@@ -152,9 +153,17 @@ def _(mo):
 @app.cell
 def _(pd, pl):
     # Cell tags: data
-    power_df = pl.from_pandas(pd.read_csv('data/power.csv', parse_dates=["time"]), include_index=False)
-    wind_df = pl.from_pandas(pd.read_csv('data/weather.csv', parse_dates=["time"]), include_index= False)
-    wind_df = wind_df.with_columns(pl.from_epoch(pl.col("Source_time")).alias("Source_time"))
+    power_df = pl.from_pandas(
+        pd.read_csv("data/power.csv", parse_dates=["time"]),
+        include_index=False,
+    )
+    wind_df = pl.from_pandas(
+        pd.read_csv("data/weather.csv", parse_dates=["time"]),
+        include_index=False,
+    )
+    wind_df = wind_df.with_columns(
+        pl.from_epoch(pl.col("Source_time")).alias("Source_time")
+    )
     return power_df, wind_df
 
 
@@ -185,7 +194,7 @@ def _(mo):
 @app.cell
 def _(power_df):
     ### TODO -> REMOVE UNNECESSARY COLUMNS ###
-    power_df_select = power_df.select(["time","Total"])
+    power_df_select = power_df.select(["time", "Total"])
     power_df_select
     return (power_df_select,)
 
@@ -233,7 +242,7 @@ def _(mo):
 @app.cell
 def _():
     # Joining the data
-    #joined_dfs = power_df.join(wind_df, how="inner")
+    # joined_dfs = power_df.join(wind_df, how="inner")
     return
 
 
@@ -249,9 +258,19 @@ def _(mo):
 def _(pl, power_df_select, wind_df_needed_columns):
     ### TODO -> JOIN THE TWO DATASETS ###
     def resample(granularity="1h"):
-        wind_df_upsampled = wind_df_needed_columns.upsample(time_column="time", every=granularity).with_columns(pl.col("Direction").fill_null(strategy="forward"), pl.col("Speed").fill_null(strategy="forward"))
-        power_df_downsampled = power_df_select.with_columns(pl.col("time").dt.round(granularity))
-        return power_df_downsampled.join(wind_df_upsampled, how="inner", on="time")
+        wind_df_upsampled = wind_df_needed_columns.upsample(
+            time_column="time", every=granularity
+        ).with_columns(
+            pl.col("Direction").fill_null(strategy="forward"),
+            pl.col("Speed").fill_null(strategy="forward"),
+        )
+        power_df_downsampled = power_df_select.with_columns(
+            pl.col("time").dt.round(granularity)
+        )
+        return power_df_downsampled.join(
+            wind_df_upsampled, how="inner", on="time"
+        )
+
     joined_dfs = resample()
     return joined_dfs, resample
 
@@ -307,7 +326,9 @@ def _(joined_dfs, np, pl, plt):
         pl.col("Total").mean(), pl.col("Speed").mean()
     )
 
-    bar_width = 0.35  # Adjusted slightly so side-by-side bars don't overlap completely
+    bar_width = (
+        0.35  # Adjusted slightly so side-by-side bars don't overlap completely
+    )
     x = np.arange(len(wind_grouped_by_direction["Direction"]))
 
     ax[2].bar(
@@ -378,12 +399,14 @@ def _(mo):
 @app.cell
 def _(LinearRegression, Pipeline, StandardScaler):
     # A very basic pipeline
-    pipeline_example = Pipeline([
-        # Transformations
-        ("Scaler", StandardScaler()),
-        # Estimator
-        ("Linear Regression", LinearRegression())
-    ])
+    pipeline_example = Pipeline(
+        [
+            # Transformations
+            ("Scaler", StandardScaler()),
+            # Estimator
+            ("Linear Regression", LinearRegression()),
+        ]
+    )
     return (pipeline_example,)
 
 
@@ -391,10 +414,12 @@ def _(LinearRegression, Pipeline, StandardScaler):
 def _(LinearRegression, Pipeline, StandardScaler):
     ### TODO -> CREATE YOUR OWN PIPELINE ###
     # Create your pipeline with the desired transformers
-    pipeline = Pipeline([
-        ("Scaler", StandardScaler()),
-        ("Linear Regression", LinearRegression())
-    ])
+    pipeline = Pipeline(
+        [
+            ("Scaler", StandardScaler()),
+            ("Linear Regression", LinearRegression()),
+        ]
+    )
     return (pipeline,)
 
 
@@ -413,21 +438,24 @@ def _(mo):
 @app.cell
 def _(joined_dfs):
     joined_dfs_1 = joined_dfs
-    X = joined_dfs_1.select('Speed')
-    y = joined_dfs_1.select('Total')
+    X = joined_dfs_1.select("Speed")
+    y = joined_dfs_1.select("Total")
     return X, y
 
 
 @app.cell
 def _(X, mean_absolute_error, pipeline_example, train_test_split, y):
-    #joined_dfs_1 = power_df.join(wind_df).dropna()
+    # joined_dfs_1 = power_df.join(wind_df).dropna()
     def regular_train_test_split():
-        X_train, X_test, y_train, y_test = train_test_split(X, y, shuffle=False)
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, shuffle=False
+        )
         model = pipeline_example.fit(X_train, y_train)
 
         _mae = mean_absolute_error(pipeline_example.predict(X_test), y_test)
         print(_mae)
         model.score(X_test, y_test)
+
     regular_train_test_split()
     return
 
@@ -442,12 +470,12 @@ def _(mo):
 
 @app.cell
 def _():
-    #_predictions = pipeline.predict(X_test)
-    #plt.figure(figsize=(15, 4))
-    #plt.plot(np.arange(len(_predictions)), _predictions, label='Predictions')
-    #plt.plot(np.arange(len(y_test)), y_test, label='Truth')
-    #plt.legend()
-    #plt.show()
+    # _predictions = pipeline.predict(X_test)
+    # plt.figure(figsize=(15, 4))
+    # plt.plot(np.arange(len(_predictions)), _predictions, label='Predictions')
+    # plt.plot(np.arange(len(y_test)), y_test, label='Truth')
+    # plt.legend()
+    # plt.show()
     return
 
 
@@ -484,8 +512,11 @@ def _(TimeSeriesSplit, X, mean_absolute_error, pipeline, y):
             mae_scores.append(score)
             accurracy = pipeline.score(X_test, y_test)
 
-            print(f"Fold {fold + 1} MAE: {score:.4f} Accurracy: {accurracy*100:.2f}%")
-    #time_series_split()
+            print(
+                f"Fold {fold + 1} MAE: {score:.4f} Accurracy: {accurracy * 100:.2f}%"
+            )
+
+    # time_series_split()
     return
 
 
@@ -515,12 +546,14 @@ def _(mo):
 def _(mlflow):
     ## Start an MLflow run
     mlflow.sklearn.autolog()  # This is to help us track scikit learn metrics.
-    mlflow.set_tracking_uri('http://127.0.0.1:5000')  # We set the MLFlow UI to display in our local host.
-    #experiment_name = 'LinearRegression-Example'
+    mlflow.set_tracking_uri(
+        "http://127.0.0.1:5000"
+    )  # We set the MLFlow UI to display in our local host.
+    # experiment_name = 'LinearRegression-Example'
     ## Set the experiment and run name
-    #run_name = 'Simple_regression'  # Think how to best organise experiments - for example by model type
-    #mlflow.set_experiment(experiment_name)  # Give explicit names 
-    #with mlflow.start_run(run_name=run_name) as run:
+    # run_name = 'Simple_regression'  # Think how to best organise experiments - for example by model type
+    # mlflow.set_experiment(experiment_name)  # Give explicit names
+    # with mlflow.start_run(run_name=run_name) as run:
     #    pipeline.fit(X_train, y_train)
     #    _predictions = pipeline.predict(X_test)
     #    _mae = mean_absolute_error(_predictions, y_test)
@@ -564,7 +597,7 @@ def _(mlflow):
             return False
         runs = mlflow.search_runs(
             experiment_ids=[experiment.experiment_id],
-            filter_string=f"tags.mlflow.runName = '{run_name}'"
+            filter_string=f"tags.mlflow.runName = '{run_name}'",
         )
         return not runs.empty
 
@@ -583,21 +616,23 @@ def _(
 ):
     def regular_split():
         experiment_name = "Regular split experiment"
-        run_name = 'Simple_regression'
+        run_name = "Simple_regression"
         if already_run(experiment_name, run_name):
             return
         mlflow.set_experiment(experiment_name)
-        X_train, X_test, y_train, y_test = train_test_split(X, y, shuffle=False)
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, shuffle=False
+        )
 
         with mlflow.start_run(run_name=f"Regular split") as run:
             model = pipeline.fit(X_train, y_train)
-    
+
             _mae = mean_absolute_error(pipeline.predict(X_test), y_test)
             accurracy = model.score(X_test, y_test)
-            mlflow.log_metric('MAE', _mae)
-            mlflow.log_metric('accurracy', accurracy)
-    regular_split()
+            mlflow.log_metric("MAE", _mae)
+            mlflow.log_metric("accurracy", accurracy)
 
+    regular_split()
     return
 
 
@@ -621,7 +656,6 @@ def _(
         """Positional row selection that works for ndarrays, DataFrames, and Series."""
         return arr.iloc[idx] if hasattr(arr, "iloc") else arr[idx]
 
-
     def _flat_hyperparams(estimator):
         """Only scalar/JSON-friendly hyperparameters — drop nested estimator/transformer objects."""
         return {
@@ -629,7 +663,6 @@ def _(
             for k, v in estimator.get_params(deep=True).items()
             if not hasattr(v, "get_params")
         }
-
 
     def mlflow_timeseriessplit(
         X,
@@ -665,22 +698,34 @@ def _(
 
                 fold_pipeline = clone(pipeline)
 
-                with mlflow.start_run(run_name=f"fold_{fold}", nested=True) as run:
-                    mlflow.set_tags({"fold": fold, "cv_strategy": "TimeSeriesSplit"})
+                with mlflow.start_run(
+                    run_name=f"fold_{fold}", nested=True
+                ) as run:
+                    mlflow.set_tags(
+                        {"fold": fold, "cv_strategy": "TimeSeriesSplit"}
+                    )
 
                     fold_pipeline.fit(X_train, y_train)
                     y_pred = fold_pipeline.predict(X_test)
 
                     y_true_np = np.asarray(y_test).ravel()
                     y_pred_np = np.asarray(y_pred).ravel()
-                
+
                     fig, ax = plt.subplots(figsize=(15, 4))
-                    ax.plot(np.arange(len(y_pred_np)), y_pred_np, label="Predictions")
-                    ax.plot(np.arange(len(y_true_np)), y_true_np, label="Truth")
+                    ax.plot(
+                        np.arange(len(y_pred_np)),
+                        y_pred_np,
+                        label="Predictions",
+                    )
+                    ax.plot(
+                        np.arange(len(y_true_np)), y_true_np, label="Truth"
+                    )
                     ax.legend()
                     ax.set_title(f"Fold {fold}: Predictions vs Truth")
-                
-                    mlflow.log_figure(fig, f"predictions_vs_truth_fold_{fold}.png")
+
+                    mlflow.log_figure(
+                        fig, f"predictions_vs_truth_fold_{fold}.png"
+                    )
                     plt.close(fig)
 
                     mae = mean_absolute_error(y_test, y_pred)
@@ -691,7 +736,11 @@ def _(
                     mlflow.log_metric("fold_mae", mae, step=fold)
                     mlflow.log_metric("fold_r2", r2, step=fold)
 
-                    mlflow.sklearn.log_model(fold_pipeline, "model", serialization_format="cloudpickle") 
+                    mlflow.sklearn.log_model(
+                        fold_pipeline,
+                        "model",
+                        serialization_format="cloudpickle",
+                    )
                     print(f"Fold {fold + 1} MAE: {mae:.4f}  R²: {r2:.4f}")
 
                     fold_results.append((fold, mae, r2, run.info.run_id))
@@ -709,7 +758,9 @@ def _(
                     }
                 )
 
-            best_fold, best_mae, best_r2, best_run_id = min(fold_results, key=lambda r: r[1])
+            best_fold, best_mae, best_r2, best_run_id = min(
+                fold_results, key=lambda r: r[1]
+            )
             mlflow.log_metric("mae_best", best_mae)
             mlflow.set_tag("best_fold", best_fold)
 
@@ -722,19 +773,29 @@ def _(
                 version=model_info.version,
                 description=f"Best fold {best_fold} — MAE={best_mae:.4f}, R²={best_r2:.4f}",
             )
-            client.set_model_version_tag(registered_model_name, model_info.version, "fold", str(best_fold))
             client.set_model_version_tag(
-                registered_model_name, model_info.version, "source_run_id", best_run_id
+                registered_model_name,
+                model_info.version,
+                "fold",
+                str(best_fold),
+            )
+            client.set_model_version_tag(
+                registered_model_name,
+                model_info.version,
+                "source_run_id",
+                best_run_id,
             )
 
         return mae_scores, best_fold, best_mae
-    mlflow_timeseriessplit(X, y, pipeline, "Time Series Split Experiment","TSCV_parent")
+
+    mlflow_timeseriessplit(
+        X, y, pipeline, "Time Series Split Experiment", "TSCV_parent"
+    )
     return (mlflow_timeseriessplit,)
 
 
 @app.cell
 def _(np):
-
     def remove_outliers_tukey(X_train, y_train, k: float = 1.5):
         X_train = np.asarray(X_train)
         y_train = np.asarray(y_train)
@@ -752,7 +813,14 @@ def _(np):
 
 @app.cell
 def _(X, mlflow_timeseriessplit, pipeline, remove_outliers_tukey, y):
-    mlflow_timeseriessplit(X, y, pipeline, "Remove Outliers Experiment","Outliers parent", train_transform=remove_outliers_tukey)
+    mlflow_timeseriessplit(
+        X,
+        y,
+        pipeline,
+        "Remove Outliers Experiment",
+        "Outliers parent",
+        train_transform=remove_outliers_tukey,
+    )
     return
 
 
@@ -765,27 +833,41 @@ def _(
     remove_outliers_tukey,
     y,
 ):
-
     from sklearn.preprocessing import MaxAbsScaler
-    pipeline_maxabsscaler = Pipeline([
-        ("MaxScaling", MaxAbsScaler()),
-        ("Linear Regression", LinearRegression())
-    ])
 
-    mlflow_timeseriessplit(X, y, pipeline_maxabsscaler, "Max abs scaling","Max scaling", train_transform=remove_outliers_tukey)
-    return
+    pipeline_maxabsscaler = Pipeline(
+        [
+            ("MaxScaling", MaxAbsScaler()),
+            ("Linear Regression", LinearRegression()),
+        ]
+    )
+
+    mlflow_timeseriessplit(
+        X,
+        y,
+        pipeline_maxabsscaler,
+        "Max abs scaling",
+        "Max scaling",
+        train_transform=remove_outliers_tukey,
+    )
+    return (MaxAbsScaler,)
 
 
 @app.cell
 def _(LinearRegression, Pipeline, X, mlflow_timeseriessplit, y):
     from sklearn.preprocessing import RobustScaler
-    pipeline_robust = Pipeline([
-        ("MaxScaling", RobustScaler()),
-        ("Linear Regression", LinearRegression())
-    ])
 
-    mlflow_timeseriessplit(X, y, pipeline_robust, "Robust scaling","Robust scaling")
-    return
+    pipeline_robust = Pipeline(
+        [
+            ("MaxScaling", RobustScaler()),
+            ("Linear Regression", LinearRegression()),
+        ]
+    )
+
+    mlflow_timeseriessplit(
+        X, y, pipeline_robust, "Robust scaling", "Robust scaling"
+    )
+    return (RobustScaler,)
 
 
 @app.cell
@@ -801,8 +883,24 @@ def _(
     from sklearn.preprocessing import FunctionTransformer
     from sklearn.compose import ColumnTransformer
 
-    COMPASS_16 = ["N","NNE","NE","ENE","E","ESE","SE","SSE",
-                  "S","SSW","SW","WSW","W","WNW","NW","NNW"]
+    COMPASS_16 = [
+        "N",
+        "NNE",
+        "NE",
+        "ENE",
+        "E",
+        "ESE",
+        "SE",
+        "SSE",
+        "S",
+        "SSW",
+        "SW",
+        "WSW",
+        "W",
+        "WNW",
+        "NW",
+        "NNW",
+    ]
     DIR_TO_DEG = {d: i * 22.5 for i, d in enumerate(COMPASS_16)}
 
     def add_cyclic_direction(df, col="Direction"):
@@ -811,42 +909,96 @@ def _(
         return df.with_columns(
             direction_sin=rad.sin(),
             direction_cos=rad.cos(),
-        ).drop(col)
+        )
 
-    X_with_dir = joined_dfs.select(["Speed", "Direction"])
-    X_with_dir = add_cyclic_direction(X_with_dir)
+    X_with_dir = add_cyclic_direction(joined_dfs.select(["Speed", "Direction"])).drop("Direction")
 
-    pipeline_with_dir = Pipeline([
-        ("Scaling", StandardScaler()),
-        ("Linear Regression", LinearRegression())
-    ])
+    pipeline_with_dir = Pipeline(
+        [
+            ("Scaling", StandardScaler()),
+            ("Linear Regression", LinearRegression()),
+        ]
+    )
 
-    mlflow_timeseriessplit(X_with_dir, y, pipeline_with_dir, "Direction encoding","Direction encoding")
-
+    mlflow_timeseriessplit(
+        X_with_dir,
+        y,
+        pipeline_with_dir,
+        "Direction encoding",
+        "Linear",
+    )
     return X_with_dir, add_cyclic_direction
 
 
 @app.cell
-def _(Pipeline, StandardScaler, X_with_dir, mlflow_timeseriessplit, y):
-    from sklearn.ensemble import HistGradientBoostingRegressor
-    pipeline_gradient_boosting = Pipeline([
-        ("Scaling", StandardScaler()),
-        ("Gradient boosting", HistGradientBoostingRegressor())
-    ])
+def _(
+    HistGradientBoostingRegressor,
+    Pipeline,
+    StandardScaler,
+    X_with_dir,
+    add_cyclic_direction,
+    joined_dfs,
+    mlflow_timeseriessplit,
+    y,
+):
+    pipeline_gradient_boosting = Pipeline(
+        [
+            ("Scaling", StandardScaler()),
+            ("Gradient boosting", HistGradientBoostingRegressor()),
+        ]
+    )
 
-    mlflow_timeseriessplit(X_with_dir, y, pipeline_gradient_boosting, "Direction encoding","Gradient boosting")
-    return HistGradientBoostingRegressor, pipeline_gradient_boosting
+    mlflow_timeseriessplit(
+        X_with_dir,
+        y,
+        pipeline_gradient_boosting,
+        "Direction encoding",
+        "Gradient boosting",
+    )
+
+    pipeline_gradient_boosting_categorical = Pipeline(
+        [
+            #("Scaling", StandardScaler()),
+            ("Gradient boosting categorical", HistGradientBoostingRegressor(categorical_features=["Direction"])),
+        ]
+    )
+
+    mlflow_timeseriessplit(
+        add_cyclic_direction(joined_dfs.select(["Speed", "Direction"])),
+        y,
+        pipeline_gradient_boosting_categorical,
+        "Direction encoding",
+        "Gradient boosting categorical",
+    )
+
+    mlflow_timeseriessplit(
+        joined_dfs.select(["Speed", "Direction"]),
+        y,
+        pipeline_gradient_boosting_categorical,
+        "Direction encoding",
+        "Gradient boosting categorical no sin and cos",
+    )
+    return pipeline_gradient_boosting, pipeline_gradient_boosting_categorical
 
 
 @app.cell
 def _(Pipeline, StandardScaler, X_with_dir, mlflow_timeseriessplit, y):
     from sklearn.ensemble import RandomForestRegressor
-    pipeline_random_forest = Pipeline([
-        ("Scaling", StandardScaler()),
-        ("Random forest", RandomForestRegressor())
-    ])
 
-    mlflow_timeseriessplit(X_with_dir, y, pipeline_random_forest, "Direction encoding", "Random forest")
+    pipeline_random_forest = Pipeline(
+        [
+            ("Scaling", StandardScaler()),
+            ("Random forest", RandomForestRegressor()),
+        ]
+    )
+
+    mlflow_timeseriessplit(
+        X_with_dir,
+        y,
+        pipeline_random_forest,
+        "Direction encoding",
+        "Random forest",
+    )
     return
 
 
@@ -859,34 +1011,132 @@ def _(
     mlflow_timeseriessplit,
     y,
 ):
-    pipeline_gradient_boosting_tuned = Pipeline([
-        ("Scaling", StandardScaler()),
-        ("Gradient boosting", HistGradientBoostingRegressor(
-                max_leaf_nodes=63,
-                min_samples_leaf=5,
-                max_iter=100,
-        ))
-    ])
+    pipeline_gradient_boosting_tuned = Pipeline(
+        [
+            ("Scaling", StandardScaler()),
+            ("Gradient boosting", HistGradientBoostingRegressor()),
+        ]
+    )
 
-    mlflow_timeseriessplit(X_with_dir, y, pipeline_gradient_boosting_tuned, "Direction encoding","Gradient boosting tuned")
-    return (pipeline_gradient_boosting_tuned,)
+    mlflow_timeseriessplit(
+        X_with_dir,
+        y,
+        pipeline_gradient_boosting_tuned,
+        "Direction encoding",
+        "Gradient boosting tuned",
+    )
+    return
 
 
 @app.cell
 def _(
+    X_with_dir,
     add_cyclic_direction,
     mlflow_timeseriessplit,
     pipeline_gradient_boosting,
-    pipeline_gradient_boosting_tuned,
     resample,
+    y,
 ):
-    joined_dfs_minute = resample('1m')
-    y_min = joined_dfs_minute.select('Total')
+    joined_dfs_minute = resample("1m")
+    y_min = joined_dfs_minute.select("Total")
     X_with_dir_min = joined_dfs_minute.select(["Speed", "Direction"])
     X_with_dir_min = add_cyclic_direction(X_with_dir_min)
 
-    mlflow_timeseriessplit(X_with_dir_min, y_min, pipeline_gradient_boosting_tuned, "Minute granularity","Gradient boosting tuned")
-    mlflow_timeseriessplit(X_with_dir_min, y_min, pipeline_gradient_boosting, "Direction encoding","Gradient boosting minute")
+    mlflow_timeseriessplit(
+        X_with_dir,
+        y,
+        pipeline_gradient_boosting,
+        "Minute granularity vs Hour granularity",
+        "Minute",
+    )
+    mlflow_timeseriessplit(
+        X_with_dir_min,
+        y_min,
+        pipeline_gradient_boosting,
+        "Minute granularity vs Hour granularity",
+        "Hour",
+    )
+    return X_with_dir_min, y_min
+
+
+@app.cell
+def _(
+    HistGradientBoostingRegressor,
+    MaxAbsScaler,
+    Pipeline,
+    RobustScaler,
+    StandardScaler,
+    X_with_dir_min,
+    mlflow_timeseriessplit,
+    y_min,
+):
+    from sklearn.preprocessing import (
+        Normalizer,
+        QuantileTransformer,
+        PowerTransformer,
+        MinMaxScaler,
+    )
+
+    pipeline_robust_scaler = Pipeline(
+        [
+            ("scaling", RobustScaler()),
+            ("pred", HistGradientBoostingRegressor()),
+        ]
+    )
+    pipeline_normalized = Pipeline(
+        [("norm", Normalizer()), ("pred", HistGradientBoostingRegressor())]
+    )
+    pipeline_quantile = Pipeline(
+        [
+            ("quantile", QuantileTransformer()),
+            ("pred", HistGradientBoostingRegressor()),
+        ]
+    )
+    transformers = [
+        RobustScaler(),
+        Normalizer(),
+        QuantileTransformer(),
+        PowerTransformer(),
+        MaxAbsScaler(),
+        MinMaxScaler(),
+        StandardScaler(),
+    ]
+    for transformer in transformers:
+        pipe = Pipeline([
+            ("transform", transformer),
+            ("pred", HistGradientBoostingRegressor())
+        ])
+        mlflow_timeseriessplit(X_with_dir_min, y_min, pipe, "Scaler testing", transformer.__class__.__name__)
+    return
+
+
+@app.cell
+def _(
+    joined_dfs,
+    mlflow_timeseriessplit,
+    pipeline_gradient_boosting_categorical,
+    pl,
+    y,
+):
+    mlflow_timeseriessplit(
+        joined_dfs.select(["time", "Speed", "Direction"]),
+        y,
+        pipeline_gradient_boosting_categorical,
+        "Time feature engineering",
+        "Regular time",
+    )
+
+    feature_engineering = joined_dfs.select(["time", "Speed", "Direction"]).with_columns(
+        pl.col("time").dt.hour().alias("hour"),
+        pl.col("time").dt.ordinal_day().alias("doy"),
+    ).drop("time")
+    mlflow_timeseriessplit(
+        feature_engineering,
+        y,
+        pipeline_gradient_boosting_categorical,
+        "Time feature engineering",
+        "Time split into features",
+    )
     return
 
 
@@ -928,7 +1178,9 @@ def _(mo):
 def _(pd):
     future_df = pd.read_csv("data/future.csv")
     future_df["time"] = pd.to_datetime(future_df["time"], utc=True)
-    future_df["Source_time"] = pd.to_datetime(future_df["Source_time"], unit="s", utc=True)
+    future_df["Source_time"] = pd.to_datetime(
+        future_df["Source_time"], unit="s", utc=True
+    )
     return (future_df,)
 
 
@@ -942,14 +1194,14 @@ def _(mo):
 
 @app.cell
 def _(future_df, mlflow):
-    model_name = 'LinearRegression'
+    model_name = "LinearRegression"
     model_version = 1
-    model_uri = f'models:/{model_name}/{model_version}'
+    model_uri = f"models:/{model_name}/{model_version}"
     model = mlflow.pyfunc.load_model(model_uri=model_uri)
-    X_forecast = future_df[['Speed']]
+    X_forecast = future_df[["Speed"]]
     _predictions = model.predict(X_forecast)
-    predictions_df = future_df[['Speed']].copy()
-    predictions_df['Predicted_Power'] = _predictions
+    predictions_df = future_df[["Speed"]].copy()
+    predictions_df["Predicted_Power"] = _predictions
     print(predictions_df.head())
     return
 
