@@ -1,27 +1,17 @@
+from typing import Iterable
 import polars as pl
 from sklearn.base import BaseEstimator, TransformerMixin
 
-_SUFFIX = {2: "sq", 3: "cu"}
-
 
 class PolynomialColumns(BaseEstimator, TransformerMixin):
-    """Appends integer powers of one column, e.g. ``Speed`` -> ``Speed sq`` /
-    ``Speed cu``. Passes every other column through unchanged.
-    """
-
-    def __init__(self, col="Speed", degrees=(2, 3)):
-        self.col = col
-        self.degrees = degrees
+    def __init__(self, col: str = "Speed", degrees: Iterable[int] = (2, 3)):
+        self.col: str = col
+        self.degrees: Iterable[int] = degrees
 
     def fit(self, X, y=None):
         return self
 
-    def transform(self, X):
+    def transform(self, X: pl.DataFrame):
         return X.with_columns(
-            [
-                (pl.col(self.col) ** d).alias(
-                    f"{self.col} {_SUFFIX.get(d, f'p{d}')}"
-                )
-                for d in self.degrees
-            ]
+            [(pl.col(self.col) ** d).alias(f"{self.col}_p{d}") for d in self.degrees]
         )

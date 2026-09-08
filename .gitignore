@@ -208,3 +208,6 @@ __marimo__/
 mlartifacts
 mlflow.db
 mlruns
+future_predictions.csv
+future_predictions.png
+cv_folds_pred_vs_actual.png

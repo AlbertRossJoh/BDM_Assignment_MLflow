@@ -1,0 +1,60 @@
+name: wind-power-orkney
+
+python_env: python_env.yaml
+
+entry_points:
+  main:
+    parameters:
+      granularity: {type: string, default: "1m"}
+      experiment_name: {type: string, default: "wind-power-hgbr"}
+      predict_future: {type: string, default: "true"}
+      registered_model_name: {type: string, default: ""}
+      loss: {type: string, default: "absolute_error"}
+      learning_rate: {type: float, default: 0.05503031368187496}
+      max_iter: {type: float, default: 154}
+      max_leaf_nodes: {type: float, default: 15}
+      min_samples_leaf: {type: float, default: 7}
+      l2_regularization: {type: float, default: 4.59640147691376}
+      max_bins: {type: float, default: 212}
+      max_features: {type: float, default: 0.5004554464353821}
+      early_stopping: {type: string, default: "False"}
+      validation_fraction: {type: float, default: 0.15314258840296469}
+      n_iter_no_change: {type: float, default: 28}
+    command: >
+      python train.py
+      --granularity {granularity}
+      --experiment-name {experiment_name}
+      --predict-future {predict_future}
+      --registered-model-name {registered_model_name}
+      --loss {loss}
+      --learning-rate {learning_rate}
+      --max-iter {max_iter}
+      --max-leaf-nodes {max_leaf_nodes}
+      --min-samples-leaf {min_samples_leaf}
+      --l2-regularization {l2_regularization}
+      --max-bins {max_bins}
+      --max-features {max_features}
+      --early-stopping {early_stopping}
+      --validation-fraction {validation_fraction}
+      --n-iter-no-change {n_iter_no_change}
+
+  ridge:
+    parameters:
+      granularity: {type: string, default: "1m"}
+      experiment_name: {type: string, default: "wind-power-ridge"}
+      predict_future: {type: string, default: "true"}
+      registered_model_name: {type: string, default: ""}
+      alpha_min: {type: float, default: -3.0}
+      alpha_max: {type: float, default: 3.0}
+      alpha_count: {type: float, default: 25}
+      cv_splits: {type: float, default: 3}
+    command: >
+      python train_ridge.py
+      --granularity {granularity}
+      --experiment-name {experiment_name}
+      --predict-future {predict_future}
+      --registered-model-name {registered_model_name}
+      --alpha-min {alpha_min}
+      --alpha-max {alpha_max}
+      --alpha-count {alpha_count}
+      --cv-splits {cv_splits}

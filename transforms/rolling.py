@@ -25,6 +25,7 @@ class RollingMean(BaseEstimator, TransformerMixin):
                 window_size=self.window,
                 weights=self._weights(),
             )
+            .fill_null(strategy="mean")
             .alias("rolling_mean")
         )
 
