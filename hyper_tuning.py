@@ -7,38 +7,38 @@ app = marimo.App(width="medium")
 @app.cell
 def _():
     import marimo as mo
-    import polars as pl
     import numpy as np
+    import polars as pl
     from sklearn.pipeline import Pipeline
+    from sklearn.compose import ColumnTransformer
+    from sklearn.impute import SimpleImputer
+    from sklearn.preprocessing import StandardScaler
     from sklearn.linear_model import LinearRegression
     from sklearn.ensemble import HistGradientBoostingRegressor
-    from sklearn.preprocessing import OneHotEncoder
-    from sklearn.model_selection import (
-        train_test_split,
-        cross_val_score,
-        TimeSeriesSplit,
+    from transforms import (
+        DirectionSinCos,
+        PolynomialColumns,
+        RollingMean,
+        TimeFeatures,
+        numeric_columns,
     )
-    from sklearn.metrics import (
-        mean_absolute_error,
-        r2_score,
-        mean_squared_error,
-        root_mean_squared_error,
-    )
+    from data_wrangler import DataWrangler
+    from pipeline_runner import PipelineRunner
 
     return (
-        HistGradientBoostingRegressor,
+        ColumnTransformer,
+        DataWrangler,
+        DirectionSinCos,
         LinearRegression,
-        OneHotEncoder,
         Pipeline,
-        TimeSeriesSplit,
-        cross_val_score,
-        mean_absolute_error,
-        mean_squared_error,
-        np,
+        PipelineRunner,
+        PolynomialColumns,
+        RollingMean,
+        SimpleImputer,
+        StandardScaler,
+        TimeFeatures,
+        numeric_columns,
         pl,
-        r2_score,
-        root_mean_squared_error,
-        train_test_split,
     )
 
 
@@ -55,89 +55,64 @@ def _(pl):
 
 
 @app.cell
-def _(pl, power_df, wind_df):
-    # Wrangling
-    def resample_old(
-        wind_df: pl.DataFrame, power_df: pl.DataFrame, granularity="1h"
-    ) -> pl.DataFrame:
-        wind_df_upsampled = wind_df.upsample(
-            time_column="time", every=granularity
-        ).with_columns(
-            pl.col("Direction").fill_null(strategy="forward"),
-            pl.col("Speed").fill_null(strategy="forward"),
-        )
-        power_df_downsampled = power_df.with_columns(
-            pl.col("time").dt.round(granularity)
-        )
-        return power_df_downsampled.join(
-            wind_df_upsampled, how="inner", on="time"
-        )
-
-    def resample(
-        wind_df: pl.DataFrame, power_df: pl.DataFrame, granularity="1h"
-    ) -> pl.DataFrame:
-        _power_df = power_df.group_by_dynamic(
-            "time", every=granularity
-        ).agg(pl.col("Total").mean())
-        _wind_df = (
-            wind_df.sort("time")
-            .upsample(time_column="time", every=granularity)
-            .with_columns(
-                pl.col("Speed").interpolate(),
-                pl.col("Direction").fill_null(strategy="forward"),
-                (pl.int_range(pl.len()) * 0).alias("_"),
-            )
-            .with_columns(
-                pl.col("Speed").is_not_null().cum_sum().alias("obs_id")
-            )
-        )
-        return _power_df.join(_wind_df, how="inner", on="time")
-
-    COMPASS_16 = [
-        "N",
-        "NNE",
-        "NE",
-        "ENE",
-        "E",
-        "ESE",
-        "SE",
-        "SSE",
-        "S",
-        "SSW",
-        "SW",
-        "WSW",
-        "W",
-        "WNW",
-        "NW",
-        "NNW",
-    ]
-    DIR_TO_DEG = {d: i * 22.5 for i, d in enumerate(COMPASS_16)}
-
-    def add_cyclic_direction(df, col="Direction"):
-        deg = df[col].replace(DIR_TO_DEG).cast(pl.Float64)
-        rad = deg.radians()
-        return df.with_columns(
-            direction_sin=rad.sin(),
-            direction_cos=rad.cos(),
-        )
-
-    joined_df = (
-        resample(wind_df=wind_df, power_df=power_df)
-        .pipe(add_cyclic_direction)
-        .drop_nulls()
-    )
-    return add_cyclic_direction, joined_df, resample
-
-
-@app.cell
-def _(add_cyclic_direction, power_df, resample, wind_df):
-    resample(wind_df=wind_df, power_df=power_df).pipe(add_cyclic_direction)
+def _(pl, wind_df):
+    wind_df.filter(pl.any_horizontal(pl.all().is_null()))
     return
 
 
 @app.cell
-def _(HistGradientBoostingRegressor, Pipeline):
-    # Pipeline
+def _(wind_df):
+    len(wind_df)
+    return
+
+
+@app.cell
+def _(DataWrangler, power_df, wind_df):
+    joined_df = DataWrangler(granularity="1m").resample(
+        wind_df=wind_df, power_df=power_df
+    )
+    return (joined_df,)
+
+
+@app.cell
+def _(power_df, wind_df):
+    wind_df["Speed"].std() + power_df["Total"].std()
+    return
+
+
+@app.cell
+def _(joined_df):
+    {
+        "rows": joined_df.height,
+        "real_rows": int(joined_df["is_real"].sum()),
+        "real_frac": joined_df["is_real"].mean(),
+    }
+    return
+
+
+app._unparsable_cell(
+    r"""
+    def direction_prep():
+        return ColumnTransformer(
+            [
+                ("dir", DirectionSinCos(), ["Direction"]),
+                ("roll", RollingMean(window=12, alpha=0.3), ["Speed"]),
+                ("num", "passthrough", numeric_columns),
+            ]
+        )
+
+    def feature_prep():
+        return [
+            ("time", TimeFeatures(col="time")),
+            ("poly", PolynomialColumns(col="Speed", degrees=(2, 3))),
+            ("prep", direction_prep()),
+    
+
+    def default_pipeline():
+        return Pipeline(
+            [*feature_prep(), ("pred", HistGradientBoostingRegressor())]
+        )
+
     def mk_pipeline(
         loss,
         learning_rate,
@@ -153,7 +128,7 @@ def _(HistGradientBoostingRegressor, Pipeline):
     ):
         return Pipeline(
             [
-                # ("quantile", QuantileTransformer()),
+                *feature_prep(),
                 (
                     "pred",
                     HistGradientBoostingRegressor(
@@ -169,13 +144,13 @@ def _(HistGradientBoostingRegressor, Pipeline):
                         validation_fraction=validation_fraction,
                         n_iter_no_change=n_iter_no_change,
                         random_state=42,
-                        categorical_features=["Direction"],
                     ),
                 ),
             ]
         )
-
-    return (mk_pipeline,)
+    """,
+    name="_"
+)
 
 
 @app.cell
@@ -190,94 +165,15 @@ def _():
 
 
 @app.cell
-def _(np):
-    # kernel
-    def get_window(n, alpha=0.3):
-        n = 12
-        alpha = 0.3
-
-        raw_weights = np.exp(-alpha * np.arange(n))
-
-        weights = list(reversed(raw_weights / np.sum(raw_weights)))
-        return weights
-
-    return (get_window,)
-
-
-@app.cell
-def _(get_window, joined_df, pl):
-    X = (
-        joined_df.select(["time", "Speed", "Direction"])
-        .with_columns(
-            pl.col("time").dt.hour().alias("hour"),
-            pl.col("time").dt.ordinal_day().alias("doy"),
-            pl.col("Speed")
-            .rolling_mean(window_size=12, weights=get_window(12))
-            .alias("rolling_mean"),
-        )
-        .drop("time")
-    )
+def _(joined_df):
+    X = joined_df.select(["time", "Speed", "Direction"])
     y = joined_df.select("Total")
-    return X, y
+    mask_full = joined_df["is_real"].to_numpy()
+    return X, mask_full, y
 
 
 @app.cell
-def _(TimeSeriesSplit, X, train_test_split, y):
-    # train test split
-    X_train, X_test, y_train, y_test = train_test_split(X, y, shuffle=False)
-    cv = TimeSeriesSplit(n_splits=3)
-    return X_test, X_train, cv, y_test, y_train
-
-
-@app.cell
-def _(
-    X,
-    X_test,
-    X_train,
-    cross_val_score,
-    cv,
-    mean_absolute_error,
-    mean_squared_error,
-    mlflow,
-    r2_score,
-    root_mean_squared_error,
-    y,
-    y_test,
-    y_train,
-):
-    def run_with_pipeline(pipeline):
-        score = cross_val_score(pipeline, X, y, cv=cv, scoring="r2").mean()
-        pipeline.fit(X_train, y_train)
-        y_pred = pipeline.predict(X_test)
-        mse = mean_squared_error(y_test, y_pred)
-        mae = mean_absolute_error(y_test, y_pred)
-        rmse = root_mean_squared_error(y_test, y_pred)
-        r2 = r2_score(y_test, y_pred)
-        mlflow.log_metrics(
-            {"MSE": mse, "MAE": mae, "RMSE": rmse, "R2": r2, "CV_R2": score}
-        )
-        mlflow.sklearn.log_model(
-            pipeline,
-            name="model",
-            skops_trusted_types=[
-                "sklearn._loss.link.IdentityLink",
-                "sklearn._loss.link.Interval",
-                "sklearn._loss.loss.AbsoluteError",
-                "sklearn.ensemble._hist_gradient_boosting.binning._BinMapper",
-                "sklearn.ensemble._hist_gradient_boosting.predictor.TreePredictor",
-                "sklearn._loss.loss.HalfSquaredError",
-                "functools.partial",
-                "sklearn.compose._column_transformer._RemainderColsList",
-                "sklearn.utils.validation.check_array",
-            ],
-        )
-        return score
-
-    return (run_with_pipeline,)
-
-
-@app.cell
-def _(mk_pipeline, mlflow, optuna, run_with_pipeline):
+def _(PipelineRunner, X, mask_full, mk_pipeline, mlflow, optuna, y):
     # objective function
     def objective(trial: optuna.trial.Trial):
         with mlflow.start_run(
@@ -349,14 +245,16 @@ def _(mk_pipeline, mlflow, optuna, run_with_pipeline):
             }
             mlflow.log_params(params)
             pipeline = mk_pipeline(**params)
-            score = run_with_pipeline(pipeline)
+            score = PipelineRunner(
+                pipeline, mask_full, split_counts=(3, 5, 8)
+            ).run(X, y)
             trial.set_user_attr("run_id", child_run.info.run_id)
             return score
 
     return (objective,)
 
 
-@app.cell
+@app.cell(disabled=True)
 def _(mlflow, objective, optuna):
     # Run tuning
     with mlflow.start_run(run_name="Tune model") as run:
@@ -373,50 +271,76 @@ def _(mlflow, objective, optuna):
     return
 
 
-@app.cell
-def _(HistGradientBoostingRegressor, Pipeline, mlflow, run_with_pipeline):
-    pipeline = Pipeline(
-        [
-            # ("quantile", QuantileTransformer()),
-            (
-                "pred",
-                HistGradientBoostingRegressor(
-                    categorical_features=["Direction"]
-                ),
-            ),
-        ]
-    )
+@app.cell(disabled=True)
+def _(PipelineRunner, X, default_pipeline, mask_full, mlflow, y):
     with mlflow.start_run(
-        nested=True, run_name=f"default_init"
+        nested=True, run_name="default_init"
     ) as child_run_defualt:
-        run_with_pipeline(pipeline)
-        # trial.set_user_attr("run_id", child_run_defualt.info.run_id)
+        PipelineRunner(
+            default_pipeline(), mask_full, split_counts=(3, 5, 8)
+        ).run(X, y)
     return
 
 
 @app.cell
-def _(LinearRegression, OneHotEncoder, Pipeline, mlflow, run_with_pipeline):
+def _(
+    ColumnTransformer,
+    DirectionSinCos,
+    LinearRegression,
+    Pipeline,
+    PipelineRunner,
+    PolynomialColumns,
+    RollingMean,
+    SimpleImputer,
+    StandardScaler,
+    TimeFeatures,
+    X,
+    mask_full,
+    mlflow,
+    numeric_columns,
+    y,
+):
+    _num_branch = Pipeline(
+        [
+            ("impute", SimpleImputer(strategy="median")),
+            ("scale", StandardScaler()),
+        ]
+    )
+    _roll_branch = Pipeline(
+        [
+            ("roll", RollingMean(window=12, alpha=0.3)),
+            ("impute", SimpleImputer(strategy="median")),
+            ("scale", StandardScaler()),
+        ]
+    )
     pipeline_linear = Pipeline(
         [
-            ("encoding", OneHotEncoder(handle_unknown="ignore")),
+            ("time", TimeFeatures(col="time")),
+            ("poly", PolynomialColumns(col="Speed", degrees=(2, 3))),
+            (
+                "prep",
+                ColumnTransformer(
+                    [
+                        ("dir", DirectionSinCos(), ["Direction"]),
+                        ("roll", _roll_branch, ["Speed"]),
+                        ("num", _num_branch, numeric_columns),
+                    ]
+                ),
+            ),
             ("pred", LinearRegression()),
         ]
     )
     with mlflow.start_run(
-        nested=True, run_name=f"linear_pipeline"
+        nested=True, run_name="linear_pipeline"
     ) as child_run_linear:
-        run_with_pipeline(pipeline_linear)
-        # trial.set_user_attr("run_id", child_run_linear.info.run_id)
+        PipelineRunner(
+            pipeline_linear, mask_full, split_counts=(3, 5, 8)
+        ).run(X, y)
     return
 
 
 @app.cell
-def _(mk_pipeline, mlflow, optuna, run_with_pipeline):
-    # objective v2: search space rescaled for the ~2k-row hourly dataset.
-    # The old ranges (min_samples_leaf 300-2000, max_iter fixed at 100,
-    # learning_rate down to 0.01) forced severe underfitting once resample()
-    # collapsed the data from ~109k rows to ~2k, which is why default_init
-    # beat every tuned trial. These ranges are sized for the current dataset.
+def _(PipelineRunner, X, mask_full, mk_pipeline, mlflow, optuna, y):
     def objective_v2(trial: optuna.trial.Trial):
         with mlflow.start_run(
             nested=True, run_name=f"v2_trial_{trial.number}"
@@ -448,7 +372,9 @@ def _(mk_pipeline, mlflow, optuna, run_with_pipeline):
             }
             mlflow.log_params(params)
             pipeline = mk_pipeline(**params)
-            score = run_with_pipeline(pipeline)
+            score = PipelineRunner(
+                pipeline, mask_full, split_counts=(3, 5, 8)
+            ).run(X, y)
             trial.set_user_attr("run_id", child_run.info.run_id)
             return score
 
@@ -457,31 +383,24 @@ def _(mk_pipeline, mlflow, optuna, run_with_pipeline):
 
 @app.cell
 def _(
-    HistGradientBoostingRegressor,
-    Pipeline,
+    PipelineRunner,
+    X,
+    default_pipeline,
+    mask_full,
     mlflow,
     objective_v2,
     optuna,
-    run_with_pipeline,
+    y,
 ):
     mlflow.set_experiment("Hyperparameter Tuning v2")
 
     with mlflow.start_run(run_name="default_init_v2"):
-        run_with_pipeline(
-            Pipeline(
-                [
-                    (
-                        "pred",
-                        HistGradientBoostingRegressor(
-                            categorical_features=["Direction"]
-                        ),
-                    )
-                ]
-            )
-        )
+        PipelineRunner(
+            default_pipeline(), mask_full, split_counts=(3, 5, 8)
+        ).run(X, y)
 
     with mlflow.start_run(run_name="Tune model v2") as run_v2:
-        n_trials_v2 = 50
+        n_trials_v2 = 20
         mlflow.log_param("n_trials", n_trials_v2)
 
         study_v2 = optuna.create_study(direction="maximize")
@@ -509,8 +428,7 @@ def _(
 
 
 @app.cell
-def _(mk_pipeline, mlflow, optuna, run_with_pipeline):
-
+def _(PipelineRunner, X, mask_full, mk_pipeline, mlflow, optuna, y):
     BASELINE_PARAMS = {
         "loss": "absolute_error",
         "learning_rate": 0.05503031368187496,
@@ -556,7 +474,10 @@ def _(mk_pipeline, mlflow, optuna, run_with_pipeline):
             }
             mlflow.log_params(params)
             pipeline = mk_pipeline(**params)
-            score = run_with_pipeline(pipeline)
+
+            score = PipelineRunner(
+                pipeline, mask_full, split_counts=(3, 5, 8)
+            ).run(X, y)
             trial.set_user_attr("run_id", child_run.info.run_id)
             return score
 
@@ -566,16 +487,21 @@ def _(mk_pipeline, mlflow, optuna, run_with_pipeline):
 @app.cell
 def _(
     BASELINE_PARAMS,
+    PipelineRunner,
+    X,
+    mask_full,
     mk_pipeline,
     mlflow,
     objective_v3,
     optuna,
-    run_with_pipeline,
+    y,
 ):
     mlflow.set_experiment("Hyperparameter Tuning v3")
 
     with mlflow.start_run(run_name="baseline_v2_best"):
-        run_with_pipeline(mk_pipeline(**BASELINE_PARAMS))
+        PipelineRunner(
+            mk_pipeline(**BASELINE_PARAMS), mask_full, split_counts=(3, 5, 8)
+        ).run(X, y)
 
     with mlflow.start_run(run_name="Tune model v3") as run_v3:
         n_trials_v3 = 20
