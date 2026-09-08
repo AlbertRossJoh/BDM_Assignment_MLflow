@@ -13,17 +13,32 @@
 = Data alignment
 Data was loaded in using using the `read_csv` function from `polars` which is a popular dataframe library.
 
-One of the main issues with the two datasets is the different cardinality and resolution. There are multiple ways of addressing this; however I ended up taking the following approach.
-- Load power generation and weather forecast data
-- Align the two data sources temporally (e.g. resampling, joins, or interpolation)
-- Clearly justify your alignment strategy and discuss its implications
+One of the main issues with the two datasets is the different cardinality and resolution. This being because the power dataset is sampled every minute, but the wind dataset is sampled every three hours.There are multiple ways of addressing this; either downsample the power dataset to match the 3 hour interval, or upsample the wind dataset to match the minute interval. Or do something in-between. The main benefit of downsampling is that we match the data to the least common denominator, i.e. we're not creating any data or making any assumptions about its shape. This however comes at the cost of the amount of training data as-well as the granularity of the predictions. Upsampling is the opposite of this, we need to make assumptions about the data's shape, however we end up getting more data and predictions can be made with higher granularity #footnote([Granularity here being the precision of the prediction, if the model has been trained on hourly data, it will be hard to predict what will happen the next second.]).
+
+The approach which seems to maintain most of the variance of the dataset, is upsampling the wind data to minute granularity. The sum of the standard deviations of wind speed an total power output, is in the original dataset $~15.90$, with the sum of the re-sampled standard deviations being $~15.76$.
+
+The upsampling is done by interpolating between actual data points, which assumes that windspeed changes smoothly, direction is also interpolated, using a simple algorithm which just chooses the midpoint between two categorical directions.
+
+The downsampling is done by grouping the power dataset by hours and taking the mean of the total power output.
+
+The main reason for upsampling the wind data to such an extreme is that the variance did not take a bit hit, and the model predictions got better.
+
+
+//- Load power generation and weather forecast data
+//- Align the two data sources temporally (e.g. resampling, joins, or interpolation)
+//- Clearly justify your alignment strategy and discuss its implications
 
 = Data preprocessing with pipelines
 
-- Apply a suitable data-splitting strategy for train and test
-- Handle missing values
-- Transform wind direction into a numeric representation (e.g. encoding, radians, vector form)
-- Scale numerical features where appropriate
+The data-splitting was done within the objective function using Cross-Validation (CV). When using CV the number of folds chosen were 3, 5 and 8; however when optimizing the hyperparameters, the 3 splits were chosen, while the two other splits are metrics logged. The reason for this split is a bit arbitrary, but when testing it was a nice balance between having large sets to train the model on, while also having sufficient testing data. The method used is the `TimeSeriesSplit` which trains the model in increasing order.
+
+The dataset does not have any null values, any introduced are by doing joins and re-sampling, which have been described above.
+
+The need to handle direction encoding, differs by the model which is chosen. For a linear regression model, which does not have built in support for categorical data, we can encode the direction into sinus and cosinus. The main problem here being that linear models does not handle non-linear data well.
+//- Apply a suitable data-splitting strategy for train and test
+//- Handle missing values
+//- Transform wind direction into a numeric representation (e.g. encoding, radians, vector form)
+//- Scale numerical features where appropriate
 
 
 = Model training and evaluation
