@@ -47,22 +47,19 @@ The downsampling is done by grouping the power dataset by hours and taking the m
 The main reason for upsampling the wind data to such an extreme is that the variance did not take a bit hit, and the model predictions got better.
 
 
-
-
 = Data preprocessing <sec:preprocessing>
-// The sklearn Pipeline / ColumnTransformer that wraps every step below.
 
 == Train/test split <sec:split>
-// Splitting strategy for time-series data and why (TimeSeriesSplit, no shuffling).
+The data-splitting was done using Cross-Validation (CV). When using CV the number of folds chosen were 3, 5 and 8; however when optimizing the hyperparameters, the 3 splits were chosen, while the two other splits are metrics logged. The reason for this split is a bit arbitrary, but when testing it was a nice balance between having large sets to train the model on, while also having sufficient testing data. The method used is the `TimeSeriesSplit` which trains the model in increasing order. The reason for using this, is when using regular splitting, it is done randomly, we do not want to do this as the data is temporally dependent, i.e. $t$ is dependent on $t-1$.
 
 == Missing values <sec:missing>
-// How gaps are handled (imputation strategy, native NaN handling) and why.
+The dataset does not have any null values, any introduced are by doing joins and re-sampling, which have been described above.
 
 == Wind direction encoding <sec:direction>
-// Compass -> numeric representation (sin/cos vector form) and why over label/one-hot.
-
+The need to handle direction encoding, differs by the model which is chosen. For a linear regression model, which does not have built in support for categorical data, we can encode the direction into sinus and cosinus. The main problem here being that linear models does not handle non-linear data well. I chose to go with boosted trees for my main model, specifically the `sklearn.ensemble.HistGradientBoostRegressor`. This has native support for categorical data. However the categories does not really represent the circular dependency of the data, i.e. which directions are close to each other. I therefore complimented it with the direction encoding, however, for boosted trees, it did not seem to make much of a difference.
 == Feature scaling <sec:scaling>
-// Which features are scaled, which estimators need it, and why.
+With a linear regression pipeline, it can make a lot of sense to to scale features, as is changes the properties of how the curve is fitted. However since I ended up using boosted trees, this benefit is no longer there. The reason is that boosted trees makes a series of "splits", meaning that monotonic transformations (such as scaling) have no real impact.
+
 
 = Model training and evaluation <sec:modeling>
 
