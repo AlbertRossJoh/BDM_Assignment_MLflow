@@ -19,9 +19,9 @@
 )
 
 = Introduction
-A common problem within the space of machine learning is the need to predict time series data. Time series data can take many forms, however in this report we will focus on weather data. Specifically, given a set of training data, how can we use common tooling, feature engineering and multiple machine learning models to reach an acceptable fit.
+In 2020 the Orkney islands generated 128% of their electricity needs from renewables @orkney where bulk of this power generation, came from wind turbines @orkney-renewables. Orkney currently has limitations with their grid, as export is constrained to the capacity of two subsea cables @orkney. For this reason, short-term forecasts of power generated from wind-energy could be desirable. The main focus of this report is building a reproducible machine learning pipeline that predicts total power output, given a forecast of wind speed and direction.
 
-The data in question is a 90 day frame of wind speed and direction with another dataset showing the amount of power generated through wind turbines. The goal is to use MLOps to streamline model selection and comparison.
+The data in question is a 90 day frame of wind speed and direction with another dataset showing the amount of power generated through wind turbines.
 == Overview
 = Methodology <sec:methods>
 
@@ -31,13 +31,23 @@ Most of the libraries are for convenience, however, we should specifically highl
 
 The main discovery process has been in a python notebook #footnote([Specifically a marimo notebook]), with models and model metrics being logged to `mlflow`. This initial discovery process was for previewing different models on a simple dataset. After this initial discovery process, the main focus was improve the best model. This was both done through feature engineering and hyperparameter tuning. The tuning was done through `optuna` @akiba2019optuna, which is a hyperparameter tuning framework.
 
-// something about the pipeline handling all transformations
+Both feature transformations/engineering, and the model itself, is placed in a single pipeline. This means that model fitting and predictions are reproducible, and simple.
 
 
 = Data alignment <sec:alignment>
-// Loading power generation + weather forecast data.
-// Temporal alignment strategy (resampling / joins / interpolation) and *why*.
-// Implications of the chosen strategy (e.g. interpolated rows, mask of real vs synthetic).
+//Data was loaded in using using the `read_csv` function from `polars` which is a popular dataframe library.
+One of the main issues with the two datasets is the different cardinality and resolution. This being because the power dataset is sampled every minute, but the wind dataset is sampled every three hours. There are multiple ways of addressing this; either downsample the power dataset to match the 3 hour interval, or upsample the wind dataset to match the minute interval. Or do something in-between. The main benefit of downsampling is that we match the data to the least common denominator, i.e. we're not creating any data or making any assumptions about its shape. This however comes at the cost of the amount of training data as-well as the granularity of the predictions. Upsampling is the opposite of this, we need to make assumptions about the data's shape, however we end up getting more data and predictions can be made with higher granularity #footnote([Granularity here being the precision of the prediction, if the model has been trained on hourly data, it will be hard to predict what will happen the next second.]).
+
+The approach which seems to maintain most of the variance of the dataset, is upsampling the wind data to minute granularity. The sum of the standard deviations of wind speed an total power output, is in the original dataset $~15.90$, with the sum of the re-sampled standard deviations being $~15.85$. A more balanced approach is to re-sample the data to hour granularity, however this does not maintain as much of the variance $~15.65$.
+
+The upsampling is done by interpolating between actual data points, which assumes that windspeed changes smoothly, direction is also interpolated, using a simple algorithm which just chooses the midpoint between two categorical directions.
+
+The downsampling is done by grouping the power dataset by hours and taking the mean of the total power output.
+
+The main reason for upsampling the wind data to such an extreme is that the variance did not take a bit hit, and the model predictions got better.
+
+
+
 
 = Data preprocessing <sec:preprocessing>
 // The sklearn Pipeline / ColumnTransformer that wraps every step below.
