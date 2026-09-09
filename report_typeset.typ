@@ -96,3 +96,47 @@ The main discovery process has been in a python notebook #footnote([Specifically
 
 = Use of generative AI <sec:ai>
 Anthropic's Claude @claude was used during this project as a coding assistant and a sounding board. Concretely it helped scaffold and refactor parts of the pipeline code (the MLflow Project entry points, and the shared plotting and experiment helpers), and discuss design trade-offs such as the temporal alignment strategy and the cross-validation setup. All generated code and text were reviewed, tested, and edited by the author, who takes full responsibility for the final submission. Model selection, feature-engineering decisions, and interpretation of the results are the author's own.
+== Example of code refactor
+One of the refactors made by Clause is from a function into a pipeline transformer.
+```Python
+COMPASS_16 = [
+  "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+  "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW",
+]
+DIR_TO_DEG = {d: i * 22.5 for i, d in enumerate(COMPASS_16)}
+
+def add_cyclic_direction(df, col="Direction"):
+    deg = df[col].replace(DIR_TO_DEG).cast(pl.Float64)
+    rad = deg.radians()
+    return df.with_columns(
+        direction_sin=rad.sin(),
+        direction_cos=rad.cos(),
+    )
+```
+
+refactored into
+
+```Python
+class DirectionSinCos(BaseEstimator, TransformerMixin):
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+        angle = (
+            pl.col("Direction").replace_strict(
+                DIR_TO_IDX, return_dtype=pl.Float64
+            )
+            * 22.5
+        ).radians()
+        return X.select(
+            angle.sin().alias("direction_sin"),
+            angle.cos().alias("direction_cos"),
+        )
+
+    def get_feature_names_out(self, input_features=None):
+        return ["direction_sin", "direction_cos"]
+```
+== Example of code generation
+In `train.py` the main function takes 19 variables, for each of these we have to manually annotate a click option and a default value. This is very time consuming to do by hand without any clear benefit. Thus a set of hyperparameters were supplied to claude after which the function was scaffolded.
+
+The plotting code was completely built by claude.
