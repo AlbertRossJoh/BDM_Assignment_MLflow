@@ -27,11 +27,9 @@ class DirectionSinCos(BaseEstimator, TransformerMixin):
     def fit(self, X, y=None):
         return self
 
-    def transform(self, X):
+    def transform(self, X: pl.DataFrame):
         angle = (
-            pl.col("Direction").replace_strict(
-                DIR_TO_IDX, return_dtype=pl.Float64
-            )
+            pl.col("Direction").replace_strict(DIR_TO_IDX, return_dtype=pl.Float64)
             * 22.5
         ).radians()
         return X.select(
