@@ -49,10 +49,12 @@ def _():
         HistGradientBoostingRegressor,
         LinearRegression,
         MLPRegressor,
+        MinMaxScaler,
         OneHotEncoder,
         SVR,
         TimeFeatures,
         mlflow,
+        numeric_columns,
         pl,
     )
 
@@ -291,6 +293,65 @@ def _(FunctionTransformer, builder, joined_df, pl, regressors):
         .with_experiment_name("Compare feature engineering")
         .with_run_name("with speed trans without sin cos")
         .run_experiment(joined_df)
+    )
+    return
+
+
+@app.cell
+def _(
+    ExperimentBuilder,
+    FunctionTransformer,
+    MinMaxScaler,
+    OneHotEncoder,
+    TimeFeatures,
+    dirs,
+    joined_df,
+    numeric_columns,
+    pl,
+    regressors,
+):
+    (
+        ExperimentBuilder(label="Total")
+        .ignore("real_obs_weather")
+        .with_features("time", "Speed", "dir_sin", "dir_cos", "Direction")
+        .with_transformer(
+            name="time feature engineering",
+            transformer=TimeFeatures(),
+        )
+        .with_transformer(
+            name="direction encoding",
+            transformer=OneHotEncoder(
+                categories=[dirs], sparse_output=False, handle_unknown="ignore"
+            ),
+            select="Direction",
+        )
+        .with_transformer(
+            name="Speed trans",
+            transformer=FunctionTransformer(
+                func=lambda x: x.with_columns(
+                    speed_sq=pl.col("Speed") ** 2,
+                    speed_cu=pl.col("Speed") ** 3,
+                )
+            ),
+        )
+        .with_transformer(name="dummy", transformer=FunctionTransformer())
+        .with_transformer(
+            name="min max scaler",
+            transformer=MinMaxScaler(),
+            select=numeric_columns,
+        )
+        .using_regressors(*regressors)
+        .with_experiment_name(
+            "Exhaustive search",
+        )
+        .exhaustive(
+            joined_df,
+            drop_on_missing={
+                "time feature engineering": "time",
+                "direction encoding": "Direction",
+                "dummy": ("dir_sin", "dir_cos"),
+            },
+        )
     )
     return
 

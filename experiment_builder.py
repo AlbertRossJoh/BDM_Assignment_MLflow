@@ -1,6 +1,8 @@
 from typing import Any, Callable, Iterable
 
 import mlflow
+from itertools import combinations, chain
+from collections import deque
 import numpy as np
 import polars as pl
 from sklearn.base import RegressorMixin, TransformerMixin, clone
@@ -27,6 +29,7 @@ class ExperimentBuilder:
         self,
         label: str,
         *,
+        pinned: Iterable[bool] = (),
         transformers: Iterable[Step] = (),
         regressors: Iterable[RegressorMixin] = (),
         features: Iterable[str] = (),
@@ -36,6 +39,7 @@ class ExperimentBuilder:
     ) -> None:
         self.did_run: bool = False
         self.label: str = label
+        self.pinned: list[bool] = list(pinned)
         self.transformers: list[Step] = [(n, clone(e)) for n, e in transformers]
         self.regressors: list[RegressorMixin] = [clone(r) for r in regressors]
         self.features: list[str] = list(features)
@@ -52,6 +56,7 @@ class ExperimentBuilder:
             banned=changes.get("banned", self.banned),
             experiment_name=changes.get("experiment_name", self._experiment_name),
             run_name=changes.get("run_name", self._run_name),
+            pinned=changes.get("pinned", self.pinned),
         )
 
     def _pruned(self, features: Iterable[str]) -> list[str]:
@@ -109,6 +114,7 @@ class ExperimentBuilder:
     def with_transformer(
         self,
         *,
+        pin: bool = False,
         name: str | None = None,
         transformer: TransformerMixin,
         before: Any | None = None,
@@ -126,7 +132,7 @@ class ExperimentBuilder:
                     select = [select]
                 select = [s for s in select if s not in self.banned]
             step: Step = (
-                f"col_{name}",
+                name,
                 ColumnTransformer(
                     [(name, transformer, select)],
                     remainder="passthrough",
@@ -137,19 +143,24 @@ class ExperimentBuilder:
             step = (name, transformer)
 
         steps = list(self.transformers)
+        pinned = list(self.pinned)
         at = self._find_before(steps, before)
         if at is None:
+            pinned.append(pin)
             steps.append(step)
         else:
+            pinned.insert(at, pin)
             steps.insert(at, step)
-        return self._evolve(transformers=steps)
+        return self._evolve(transformers=steps, pinned=pinned)
 
     def without_transformer(self, transformer) -> "ExperimentBuilder":
         steps = list(self.transformers)
+        pinned = list(self.pinned)
         at = self._find_before(steps, transformer)
         assert at is not None, f"Could not find transformer to remove: {transformer}"
         fst, snd = steps[: at - 1], steps[at:]
-        return self._evolve(transformers=fst + snd)
+        pinned_fst, pinned_snd = pinned[: at - 1], pinned[at:]
+        return self._evolve(transformers=fst + snd, pinned=pinned_fst + pinned_snd)
 
     def build_transformers(self) -> Pipeline:
         steps = list(self.transformers)
@@ -158,6 +169,61 @@ class ExperimentBuilder:
     def _pipeline_for(self, regressor: RegressorMixin) -> Pipeline:
         steps = [*self.transformers, (type(regressor).__name__, regressor)]
         return clone(Pipeline(steps)).set_output(transform="polars")
+
+    # copied from: https://docs.python.org/2/library/itertools.html#recipes
+    @staticmethod
+    def _powerset(iterable):
+        "powerset([1,2,3]) --> () (1,) (2,) (3,) (1,2) (1,3) (2,3) (1,2,3)"
+        s = list(iterable)
+        return chain.from_iterable(combinations(s, r) for r in range(len(s) + 1))
+
+    def exhaustive(
+        self, df: pl.DataFrame, drop_on_missing: dict[str, Iterable[str]] = {}
+    ) -> None:
+        """
+        Exhaustive experiment runs with different transformer combinations
+        This is an expensive operation only 5 transformers results in 32 experiment runs!
+        """
+        not_pinned = [
+            (idx, step)
+            for idx, (step, pinned) in enumerate(zip(self.transformers, self.pinned))
+            if not pinned
+        ]
+        pinned = [
+            (idx, step)
+            for idx, (step, pinned) in enumerate(zip(self.transformers, self.pinned))
+            if pinned
+        ]
+        for subset in self._powerset(not_pinned):
+            # a stack could be used but I cannot bother
+            q: deque[tuple[int, Step]] = deque(subset)
+            transformers: list[Step] = []
+            pinned_idx = 0
+            while q:
+                idx, step = q.popleft()
+                if pinned_idx < len(pinned) and pinned[pinned_idx][0] < idx:
+                    transformers.append(pinned[pinned_idx][1])
+                    q.appendleft((idx, step))
+                    pinned_idx += 1
+                    continue
+                transformers.append(step)
+            while pinned_idx < len(pinned):
+                transformers.append(pinned[pinned_idx][1])
+                pinned_idx += 1
+
+            using_names: list[str] = list(map(lambda x: x[0], transformers))
+            if len(using_names) == 0:
+                run_name = "no transformers"
+            else:
+                run_name = f"using: {','.join(using_names)}"
+
+            builder = self._evolve(transformers=transformers, run_name=run_name)
+            for drop_name, drop_cols in drop_on_missing.items():
+                if drop_name not in using_names:
+                    cols = (drop_cols,) if isinstance(drop_cols, str) else drop_cols
+                    builder = builder.drop(*cols)
+
+            builder.run_experiment(df)
 
     def run_experiment(self, df: pl.DataFrame) -> None:
         if self.did_run:
@@ -199,7 +265,10 @@ class ExperimentBuilder:
             mlflow.log_metrics(metrics)
             final = self._fit_full(df, regressor)
             self._log_dataset(df, final)
-            self._log_model(final, metrics)
+            info = mlflow.sklearn.log_model(
+                final, name="model", serialization_format="cloudpickle"
+            )
+            mlflow.log_metrics(metrics, model_id=info.model_id)
 
     def _fit_full(self, df: pl.DataFrame, regressor: RegressorMixin) -> Pipeline:
         pipeline = self._pipeline_for(regressor)
@@ -217,15 +286,6 @@ class ExperimentBuilder:
             name="training",
         )
         mlflow.log_input(dataset, context="training")
-
-    def _log_model(
-        self, pipeline: Pipeline, metrics: dict[str, float], name: str = "model"
-    ):
-        info = mlflow.sklearn.log_model(
-            pipeline, name=name, serialization_format="cloudpickle"
-        )
-        mlflow.log_metrics(metrics, model_id=info.model_id)
-        return info
 
     def _cv_scores(
         self,
@@ -268,22 +328,3 @@ class ExperimentBuilder:
             summary[f"worst_{name}"] = lo if name == "r2" else hi
             summary[f"mean_{name}"] = float(np.mean(values))
         return summary
-
-    def log_model(
-        self,
-        df: pl.DataFrame,
-        regressor: RegressorMixin,
-        name: str = "model",
-    ) -> Pipeline:
-        assert self._experiment_name, (
-            "provide an experiment name first; use with_experiment_name"
-        )
-        mlflow.set_experiment(self._experiment_name)
-
-        with mlflow.start_run(run_name=f"{self._run_name_for(regressor)} [final]"):
-            metrics = self._cv_scores(df, regressor)
-            mlflow.log_metrics(metrics)
-            pipeline = self._fit_full(df, regressor)
-            self._log_dataset(df, pipeline)
-            self._log_model(pipeline, metrics, name)
-        return pipeline
