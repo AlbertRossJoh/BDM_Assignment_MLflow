@@ -8,6 +8,7 @@ from collections import deque
 import numpy as np
 import polars as pl
 from joblib import Parallel, delayed
+from tqdm import tqdm
 from sklearn.base import RegressorMixin, TransformerMixin, clone
 from sklearn.compose import ColumnTransformer
 from sklearn.metrics import (
@@ -332,10 +333,12 @@ class ExperimentBuilder:
         builder: "ExperimentBuilder",
         df: pl.DataFrame,
         tracking_uri: str,
+        log_model: bool,
     ) -> None:
         mlflow.set_tracking_uri(tracking_uri)
-        mlflow.sklearn.autolog()
-        builder.run_experiment(df)
+        if log_model:
+            mlflow.sklearn.autolog()
+        builder.run_experiment(df, log_model=log_model)
 
     def exhaustive(
         self,
@@ -345,6 +348,7 @@ class ExperimentBuilder:
         conflicting: dict[str, str | Iterable[str]] = {},
         keep_on_present: dict[str, str | Iterable[str]] = {},
         n_jobs: int = -1,
+        log_model: bool = False,
     ) -> None:
         """
         Exhaustive experiment runs with different transformer combinations
@@ -430,12 +434,21 @@ class ExperimentBuilder:
                     *current_select
                 )
             )
-        _ = Parallel(n_jobs=n_jobs, backend="loky")(
-            delayed(self._run_worker)(b, df, mlflow.get_tracking_uri())
-            for b in builders
+        _ = list(
+            tqdm(
+                Parallel(
+                    n_jobs=n_jobs, backend="loky", return_as="generator_unordered"
+                )(
+                    delayed(self._run_worker)(
+                        b, df, mlflow.get_tracking_uri(), log_model
+                    )
+                    for b in builders
+                ),
+                total=len(builders),
+            )
         )
 
-    def run_experiment(self, df: pl.DataFrame) -> None:
+    def run_experiment(self, df: pl.DataFrame, log_model: bool = True) -> None:
         if self.did_run:
             return
         assert self._experiment_name, (
@@ -443,7 +456,7 @@ class ExperimentBuilder:
         )
         mlflow.set_experiment(self._experiment_name)
         for regressor in self.regressors:
-            self._run_one(df, regressor)
+            self._run_one(df, regressor, log_model)
         self.did_run = True
 
     def _already_logged(self, run_name: str) -> str | None:
@@ -465,7 +478,9 @@ class ExperimentBuilder:
             return f"{base}/#/experiments/{experiment}/runs/{run_id}"
         return None
 
-    def _run_one(self, df: pl.DataFrame, regressor: RegressorMixin) -> None:
+    def _run_one(
+        self, df: pl.DataFrame, regressor: RegressorMixin, log_model: bool = True
+    ) -> None:
         run_name = self._run_name_for(regressor)
         if run_url := self._already_logged(self._run_name_for(regressor)):
             print(f"{run_name} already run: {run_url}")
@@ -475,10 +490,14 @@ class ExperimentBuilder:
             mlflow.log_metrics(metrics)
             final = self._fit_full(df, regressor)
             self._log_dataset(df, final)
-            info = mlflow.sklearn.log_model(
-                final, name="model", serialization_format="cloudpickle"
-            )
-            mlflow.log_metrics(metrics, model_id=info.model_id)
+            if log_model:
+                info = mlflow.sklearn.log_model(
+                    final,
+                    name="model",
+                    serialization_format="cloudpickle",
+                    pip_requirements=["scikit-learn", "polars", "numpy"],
+                )
+                mlflow.log_metrics(metrics, model_id=info.model_id)
 
     def _fit_full(self, df: pl.DataFrame, regressor: RegressorMixin) -> Pipeline:
         pipeline = self._pipeline_for(regressor)
