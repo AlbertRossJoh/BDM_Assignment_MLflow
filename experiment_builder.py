@@ -1,10 +1,13 @@
 from typing import Any, Callable, Iterable
 
 import mlflow
+import random
+import hashlib
 from itertools import combinations, chain
 from collections import deque
 import numpy as np
 import polars as pl
+from joblib import Parallel, delayed
 from sklearn.base import RegressorMixin, TransformerMixin, clone
 from sklearn.compose import ColumnTransformer
 from sklearn.metrics import (
@@ -16,12 +19,135 @@ from sklearn.model_selection import TimeSeriesSplit
 from sklearn.pipeline import Pipeline
 
 Step = tuple[str, TransformerMixin]
+ColumnTransformerStep = tuple[str, TransformerMixin, Iterable[str] | Callable]
 
 _METRICS = {
     "mae": mean_absolute_error,
     "rmse": root_mean_squared_error,
     "r2": r2_score,
 }
+
+
+class ColumnTransformerBuilder:
+    def __init__(
+        self,
+        *,
+        name: str = "",
+        transformers: Iterable[ColumnTransformerStep] = (),
+        banned: Iterable[str] = (),
+        chained: tuple[
+            str | None, str | Iterable[str] | Callable | None, Iterable[Step]
+        ] = (
+            None,
+            None,
+            (),
+        ),
+    ) -> None:
+        self.transformers: list[ColumnTransformerStep] = []
+        for n, e, s in transformers:
+            if callable(s):
+                inner = select
+                select = lambda X: [c for c in inner(X) if c not in banned]
+            else:
+                select = list(s)
+            self.transformers.append((n, clone(e), select))
+
+        self.name: str = name
+        self.banned: list[str] = list(banned)
+        chain_name, chained_select, chain = chained
+        if (
+            not callable(chained_select)
+            and not isinstance(chained_select, str)
+            and chained_select is not None
+        ):
+            chained_select = list(chained_select)
+
+        self.chained: tuple[
+            str | None, str | Iterable[str] | Callable | None, list[Step]
+        ] = (
+            chain_name,
+            chained_select,
+            [(n, clone(s)) for n, s in chain],
+        )
+
+    def _evolve(self, **changes: Any) -> "ColumnTransformerBuilder":
+        return ColumnTransformerBuilder(
+            transformers=changes.get("transformers", self.transformers),
+            name=changes.get("name", self.name),
+            chained=changes.get("chained", self.chained),
+        )
+
+    def with_transformer(
+        self,
+        transformer: TransformerMixin,
+        select: Iterable[str] | str | Callable,
+        *,
+        name: str | None = None,
+        chain_name: str | None = None,
+    ) -> "ColumnTransformerBuilder":
+        next = self._finish_chained()
+        if name is None:
+            name = transformer.__class__.__name__
+        assert select is not None, (
+            "When building a column transformer, columns must be selected"
+        )
+
+        if callable(select):
+            inner, banned = select, tuple(self.banned)
+            select = lambda X: [c for c in inner(X) if c not in banned]
+        else:
+            if isinstance(select, str):
+                select = [select]
+            select = [s for s in select if s not in self.banned]
+        step: ColumnTransformerStep = (name, transformer, select)
+
+        steps = list(self.transformers)
+        if chain_name is None:
+            steps.append(step)
+        return next._evolve(
+            transformers=steps, chained=(chain_name, select, [(name, transformer)])
+        )
+
+    def _finish_chained(self) -> "ColumnTransformerBuilder":
+        name, select, steps = self.chained
+        if name is None:
+            rand = hashlib.sha1(str(random.getrandbits(128)).encode()).hexdigest()[:6]
+            name = f"{Pipeline.__class__.__name__}_{rand}"
+
+        if len(steps) > 1:
+            pipeline = Pipeline([*steps])
+            step = (name, pipeline, select)
+            steps = list(self.transformers)
+            steps.append(step)
+            return self._evolve(transformers=steps, chained=(None, None, ()))
+        return self
+
+    def with_chained(
+        self,
+        transformer: TransformerMixin,
+        *,
+        name: str | None = None,
+    ) -> "ColumnTransformerBuilder":
+        if name is None:
+            name = transformer.__class__.__name__
+
+        chain_name, select, steps = self.chained
+        step: Step = (name, transformer)
+
+        steps = list(steps)
+        steps.append(step)
+        return self._evolve(chained=(chain_name, select, steps))
+
+    def build(self) -> Step:
+        end = self._finish_chained()
+        return (
+            self.name,
+            ColumnTransformer(
+                end.transformers,
+                remainder="passthrough",
+                verbose_feature_names_out=False,
+            ),
+        )
 
 
 class ExperimentBuilder:
@@ -113,10 +239,10 @@ class ExperimentBuilder:
 
     def with_transformer(
         self,
+        transformer: TransformerMixin,
         *,
         pin: bool = False,
         name: str | None = None,
-        transformer: TransformerMixin,
         before: Any | None = None,
         select: Iterable[str] | str | Callable | None = None,
     ) -> "ExperimentBuilder":
@@ -153,6 +279,30 @@ class ExperimentBuilder:
             steps.insert(at, step)
         return self._evolve(transformers=steps, pinned=pinned)
 
+    def with_column_transformer(
+        self,
+        builder: Callable[[ColumnTransformerBuilder], ColumnTransformerBuilder],
+        *,
+        pin: bool = False,
+        name: str | None = None,
+        before: Any | None = None,
+    ) -> "ExperimentBuilder":
+        if name is None:
+            rand = hashlib.sha1(str(random.getrandbits(128)).encode()).hexdigest()[:6]
+            name = f"{ColumnTransformer.__class__.__name__}_{rand}"
+
+        step = builder(ColumnTransformerBuilder(name=name, banned=self.banned)).build()
+        steps = list(self.transformers)
+        pinned = list(self.pinned)
+        at = self._find_before(steps, before)
+        if at is None:
+            pinned.append(pin)
+            steps.append(step)
+        else:
+            pinned.insert(at, pin)
+            steps.insert(at, step)
+        return self._evolve(transformers=steps, pinned=pinned)
+
     def without_transformer(self, transformer) -> "ExperimentBuilder":
         steps = list(self.transformers)
         pinned = list(self.pinned)
@@ -177,13 +327,41 @@ class ExperimentBuilder:
         s = list(iterable)
         return chain.from_iterable(combinations(s, r) for r in range(len(s) + 1))
 
+    @staticmethod
+    def _run_worker(
+        builder: "ExperimentBuilder",
+        df: pl.DataFrame,
+        tracking_uri: str,
+    ) -> None:
+        mlflow.set_tracking_uri(tracking_uri)
+        mlflow.sklearn.autolog()
+        builder.run_experiment(df)
+
     def exhaustive(
-        self, df: pl.DataFrame, drop_on_missing: dict[str, Iterable[str]] = {}
+        self,
+        df: pl.DataFrame,
+        *,
+        select: str | Iterable[str] | None = None,
+        conflicting: dict[str, str | Iterable[str]] = {},
+        keep_on_present: dict[str, str | Iterable[str]] = {},
+        n_jobs: int = -1,
     ) -> None:
         """
         Exhaustive experiment runs with different transformer combinations
         This is an expensive operation only 5 transformers results in 32 experiment runs!
         """
+        all_names = {name for name, _ in self.transformers}
+        for one, others in conflicting.items():
+            others = {others} if isinstance(others, str) else set(others)
+            for name in {one, *others}:
+                assert name in all_names, (
+                    f"conflicting references unknown transformer {name!r}"
+                )
+        for name in keep_on_present:
+            assert name in all_names, (
+                f"keep_on_present references unknown transformer {name!r}"
+            )
+
         not_pinned = [
             (idx, step)
             for idx, (step, pinned) in enumerate(zip(self.transformers, self.pinned))
@@ -194,6 +372,14 @@ class ExperimentBuilder:
             for idx, (step, pinned) in enumerate(zip(self.transformers, self.pinned))
             if pinned
         ]
+        if select is None:
+            base_select: set[str] = set()
+        elif isinstance(select, str):
+            base_select = {select}
+        else:
+            base_select = set(select)
+
+        builders: list["ExperimentBuilder"] = []
         for subset in self._powerset(not_pinned):
             # a stack could be used but I cannot bother
             q: deque[tuple[int, Step]] = deque(subset)
@@ -211,19 +397,43 @@ class ExperimentBuilder:
                 transformers.append(pinned[pinned_idx][1])
                 pinned_idx += 1
 
-            using_names: list[str] = list(map(lambda x: x[0], transformers))
+            using_names: set[str] = set(map(lambda x: x[0], transformers))
+            conflict = False
+            for one, others in conflicting.items():
+                if conflict:
+                    break
+                if isinstance(others, str):
+                    others = [others]
+                others = set(others)
+                for other in others:
+                    if len(using_names & set((one, other))) > 1:
+                        conflict = True
+                        break
+
+            if conflict:
+                continue
+
             if len(using_names) == 0:
                 run_name = "no transformers"
             else:
                 run_name = f"using: {','.join(using_names)}"
 
-            builder = self._evolve(transformers=transformers, run_name=run_name)
-            for drop_name, drop_cols in drop_on_missing.items():
-                if drop_name not in using_names:
-                    cols = (drop_cols,) if isinstance(drop_cols, str) else drop_cols
-                    builder = builder.drop(*cols)
+            current_select = set(base_select)
+            for keep_name, keep_cols in keep_on_present.items():
+                if keep_name in using_names:
+                    if isinstance(keep_cols, str):
+                        keep_cols = [keep_cols]
+                    current_select |= set(keep_cols)
 
-            builder.run_experiment(df)
+            builders.append(
+                self._evolve(transformers=transformers, run_name=run_name).select(
+                    *current_select
+                )
+            )
+        _ = Parallel(n_jobs=n_jobs, backend="loky")(
+            delayed(self._run_worker)(b, df, mlflow.get_tracking_uri())
+            for b in builders
+        )
 
     def run_experiment(self, df: pl.DataFrame) -> None:
         if self.did_run:

@@ -19,6 +19,7 @@ def _():
         MinMaxScaler,
         OneHotEncoder,
     )
+    from sklearn.impute import SimpleImputer
     from sklearn.linear_model import LinearRegression
     from sklearn.svm import SVR
     from sklearn.neural_network import MLPRegressor
@@ -40,18 +41,20 @@ def _():
     )
     from data_wrangler import DataWrangler
     from pipeline_runner import PipelineRunner
-    from experiment_builder import ExperimentBuilder
+    from experiment_builder import ExperimentBuilder, ColumnTransformerBuilder
     import mlflow
 
     return (
+        ColumnTransformerBuilder,
         ExperimentBuilder,
         FunctionTransformer,
         HistGradientBoostingRegressor,
         LinearRegression,
         MLPRegressor,
-        MinMaxScaler,
         OneHotEncoder,
         SVR,
+        SimpleImputer,
+        StandardScaler,
         TimeFeatures,
         mlflow,
         numeric_columns,
@@ -93,7 +96,7 @@ def _():
 
 
 @app.cell
-def _(dir_2_deg, pl):
+def _(pl):
     power_df = (
         pl.read_csv("data/power.csv", try_parse_dates=True)
         .select(["time", "Total"])
@@ -108,23 +111,23 @@ def _(dir_2_deg, pl):
         pl.read_csv("data/weather.csv", try_parse_dates=True)
         .select(["time", "Speed", "Direction"])
         .sort("time")
-        .with_columns(
-            pl.col("Direction")
-            .replace_strict(dir_2_deg, return_dtype=pl.Float64)
-            .radians()
-            .alias("rad"),
-        )
-        .with_columns(
-            pl.col("rad").sin().alias("dir_sin"),
-            pl.col("rad").cos().alias("dir_cos"),
-        )
-        .drop(["rad"])
+        # .with_columns(
+        #    pl.col("Direction")
+        #    .replace_strict(dir_2_deg, return_dtype=pl.Float64)
+        #    .radians()
+        #    .alias("rad"),
+        # )
+        # .with_columns(
+        #    pl.col("rad").sin().alias("dir_sin"),
+        #    pl.col("rad").cos().alias("dir_cos"),
+        # )
+        # .drop(["rad"])
         .with_columns(real_obs_weather=True)
         .upsample("time", every="1h")
         .with_columns(
-            pl.col("Direction").forward_fill(),
-            pl.col("dir_sin").interpolate(),
-            pl.col("dir_cos").interpolate(),
+            # pl.col("Direction").forward_fill(),
+            # pl.col("dir_sin").interpolate(),
+            # pl.col("dir_cos").interpolate(),
             pl.col("Speed").interpolate(),
             pl.col("real_obs_weather").fill_null(False),
         )
@@ -144,7 +147,7 @@ def _(ExperimentBuilder, TimeFeatures):
     builder = (
         ExperimentBuilder(label="Total")
         .ignore("real_obs_weather")
-        .with_features("time", "Speed", "dir_sin", "dir_cos", "Direction")
+        .with_features("time", "Speed", "Direction")
         .with_transformer(
             name="time feature engineering",
             transformer=TimeFeatures(),
@@ -299,24 +302,70 @@ def _(FunctionTransformer, builder, joined_df, pl, regressors):
 
 @app.cell
 def _(
+    ColumnTransformerBuilder,
     ExperimentBuilder,
     FunctionTransformer,
-    MinMaxScaler,
     OneHotEncoder,
+    SimpleImputer,
+    StandardScaler,
     TimeFeatures,
+    dir_2_deg,
     dirs,
     joined_df,
     numeric_columns,
     pl,
     regressors,
 ):
+    def build_rolling_mean_transformer(
+        builder: ColumnTransformerBuilder,
+    ) -> ColumnTransformerBuilder:
+        return builder.with_transformer(
+            chain_name="rolling mean",
+            name="roll",
+            select="Speed",
+            transformer=FunctionTransformer(
+                func=lambda x: x.with_columns(
+                    pl.col("Speed")
+                    .rolling_mean(window_size=12)
+                    .alias("speed 12h mean")
+                )
+            ),
+        ).with_chained(name="impute", transformer=SimpleImputer())
+
+    def build_sin_cos_encoding_transformer(
+        builder: ColumnTransformerBuilder,
+    ) -> ColumnTransformerBuilder:
+        return builder.with_transformer(
+            chain_name="sin cos",
+            name="trans",
+            select="Direction",
+            transformer=FunctionTransformer(
+                func=lambda x: (
+                    x.with_columns(
+                        pl.col("Direction")
+                        .replace_strict(dir_2_deg, return_dtype=pl.Float64)
+                        .radians()
+                        .alias("rad"),
+                    )
+                    .with_columns(
+                        pl.col("rad").sin().alias("dir_sin"),
+                        pl.col("rad").cos().alias("dir_cos"),
+                    )
+                    .select(["dir_sin", "dir_cos"])
+                )
+            ),
+        ).with_chained(name="impute", transformer=SimpleImputer())
+
     (
         ExperimentBuilder(label="Total")
         .ignore("real_obs_weather")
-        .with_features("time", "Speed", "dir_sin", "dir_cos", "Direction")
+        .with_features("time", "Speed", "Direction")
         .with_transformer(
             name="time feature engineering",
             transformer=TimeFeatures(),
+        )
+        .with_column_transformer(
+            build_rolling_mean_transformer, name="rolling mean"
         )
         .with_transformer(
             name="direction encoding",
@@ -334,10 +383,12 @@ def _(
                 )
             ),
         )
-        .with_transformer(name="dummy", transformer=FunctionTransformer())
+        .with_column_transformer(
+            build_sin_cos_encoding_transformer, name="sin cos encoding"
+        )
         .with_transformer(
-            name="min max scaler",
-            transformer=MinMaxScaler(),
+            name="standard scaler",
+            transformer=StandardScaler(),
             select=numeric_columns,
         )
         .using_regressors(*regressors)
@@ -346,13 +397,22 @@ def _(
         )
         .exhaustive(
             joined_df,
-            drop_on_missing={
-                "time feature engineering": "time",
+            conflicting={
+                "direction encoding": "sin cos encoding",
+            },
+            select="Speed",
+            keep_on_present={
                 "direction encoding": "Direction",
-                "dummy": ("dir_sin", "dir_cos"),
+                "sin cos encoding": "Direction",
+                "time feature engineering": "time",
             },
         )
     )
+    return
+
+
+@app.cell
+def _():
     return
 
 
