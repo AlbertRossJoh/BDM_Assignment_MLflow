@@ -1,9 +1,12 @@
 #import "@preview/charged-ieee:0.1.4": ieee
+#import "@preview/wordometer:0.1.5": total-words, word-count
+
+#show: word-count.with(exclude: (raw,))
 
 #show: ieee.with(
   title: [Utilizing weather forecasts for power output prediction],
   abstract: [
-
+    #total-words words
   ],
   authors: (
     (
@@ -15,7 +18,7 @@
   ),
   index-terms: (),
   bibliography: bibliography("refs.bib"),
-  figure-supplement: [Fig.],
+  figure-supplement: [Figure],
 )
 
 = Introduction
@@ -65,6 +68,8 @@ With a linear regression pipeline, it can make a lot of sense to to scale featur
 
 == Models <sec:models>
 // The >= 2 regression models chosen (RidgeCV, HistGradientBoostingRegressor) and why.
+
+Two models were chosen based on a baseline performance on the simple data
 
 == Evaluation metrics <sec:metrics>
 // Regression metrics reported (R2, RMSE, MAE, MSE) and how they are aggregated over folds.

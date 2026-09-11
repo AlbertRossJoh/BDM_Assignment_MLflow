@@ -1,10 +1,11 @@
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Literal
 
 import mlflow
 import random
 import hashlib
 from itertools import combinations, chain
 from collections import deque
+import matplotlib.pyplot as plt
 import numpy as np
 import polars as pl
 from joblib import Parallel, delayed
@@ -16,7 +17,7 @@ from sklearn.metrics import (
     r2_score,
     root_mean_squared_error,
 )
-from sklearn.model_selection import TimeSeriesSplit
+from sklearn.model_selection import TimeSeriesSplit, train_test_split
 from sklearn.pipeline import Pipeline
 
 Step = tuple[str, TransformerMixin]
@@ -151,43 +152,32 @@ class ColumnTransformerBuilder:
         )
 
 
-class ExperimentBuilder:
+class PipelineBuilder:
     def __init__(
         self,
-        label: str,
         *,
-        pinned: Iterable[bool] = (),
         transformers: Iterable[Step] = (),
-        regressors: Iterable[RegressorMixin] = (),
-        features: Iterable[str] = (),
+        pinned: Iterable[bool] = (),
         banned: Iterable[str] = (),
-        experiment_name: str = "",
-        run_name: str = "",
+        regressor: RegressorMixin | None = None,
+        regressor_name: str | None = None,
     ) -> None:
-        self.did_run: bool = False
-        self.label: str = label
-        self.pinned: list[bool] = list(pinned)
         self.transformers: list[Step] = [(n, clone(e)) for n, e in transformers]
-        self.regressors: list[RegressorMixin] = [clone(r) for r in regressors]
-        self.features: list[str] = list(features)
+        self.pinned: list[bool] = list(pinned)
         self.banned: list[str] = list(banned)
-        self._experiment_name: str = experiment_name
-        self._run_name: str = run_name
-
-    def _evolve(self, **changes: Any) -> "ExperimentBuilder":
-        return ExperimentBuilder(
-            changes.get("label", self.label),
-            transformers=changes.get("transformers", self.transformers),
-            regressors=changes.get("regressors", self.regressors),
-            features=changes.get("features", self.features),
-            banned=changes.get("banned", self.banned),
-            experiment_name=changes.get("experiment_name", self._experiment_name),
-            run_name=changes.get("run_name", self._run_name),
-            pinned=changes.get("pinned", self.pinned),
+        self.regressor: RegressorMixin | None = (
+            clone(regressor) if regressor is not None else None
         )
+        self.regressor_name: str | None = regressor_name
 
-    def _pruned(self, features: Iterable[str]) -> list[str]:
-        return [f for f in features if f != self.label]
+    def _evolve(self, **changes: Any) -> "PipelineBuilder":
+        return PipelineBuilder(
+            transformers=changes.get("transformers", self.transformers),
+            pinned=changes.get("pinned", self.pinned),
+            banned=changes.get("banned", self.banned),
+            regressor=changes.get("regressor", self.regressor),
+            regressor_name=changes.get("regressor_name", self.regressor_name),
+        )
 
     @staticmethod
     def _find_before(steps: list[Step], before: Any | None) -> int | None:
@@ -206,38 +196,6 @@ class ExperimentBuilder:
                         return i + 1
         return None
 
-    def _run_name_for(self, regressor: RegressorMixin) -> str:
-        base = type(regressor).__name__
-        return f"{base}: {self._run_name}" if self._run_name else base
-
-    def with_experiment_name(self, name: str) -> "ExperimentBuilder":
-        return self._evolve(experiment_name=name)
-
-    def with_run_name(self, name: str) -> "ExperimentBuilder":
-        return self._evolve(run_name=name)
-
-    def using_regressors(self, *regressors: RegressorMixin) -> "ExperimentBuilder":
-        if len(regressors) == 1 and isinstance(regressors[0], (list, tuple)):
-            regressors = tuple(regressors[0])
-        return self._evolve(regressors=regressors)
-
-    def with_features(self, *features: str) -> "ExperimentBuilder":
-        return self._evolve(features=list(features))
-
-    def select(self, *features: str) -> "ExperimentBuilder":
-        return self._evolve(features=self._pruned(features))
-
-    def drop(self, *features: str) -> "ExperimentBuilder":
-        return self._evolve(
-            features=self._pruned(f for f in self.features if f not in features)
-        )
-
-    def ignore(self, *features: str) -> "ExperimentBuilder":
-        return self._evolve(banned=[*self.banned, *features])
-
-    def add(self, *features: str) -> "ExperimentBuilder":
-        return self._evolve(features=self._pruned([*self.features, *features]))
-
     def with_transformer(
         self,
         transformer: TransformerMixin,
@@ -246,7 +204,7 @@ class ExperimentBuilder:
         name: str | None = None,
         before: Any | None = None,
         select: Iterable[str] | str | Callable | None = None,
-    ) -> "ExperimentBuilder":
+    ) -> "PipelineBuilder":
         if name is None:
             name = transformer.__class__.__name__
 
@@ -282,12 +240,12 @@ class ExperimentBuilder:
 
     def with_column_transformer(
         self,
-        builder: Callable[[ColumnTransformerBuilder], ColumnTransformerBuilder],
+        builder: Callable[["ColumnTransformerBuilder"], "ColumnTransformerBuilder"],
         *,
         pin: bool = False,
         name: str | None = None,
         before: Any | None = None,
-    ) -> "ExperimentBuilder":
+    ) -> "PipelineBuilder":
         if name is None:
             rand = hashlib.sha1(str(random.getrandbits(128)).encode()).hexdigest()[:6]
             name = f"{ColumnTransformer.__class__.__name__}_{rand}"
@@ -304,7 +262,7 @@ class ExperimentBuilder:
             steps.insert(at, step)
         return self._evolve(transformers=steps, pinned=pinned)
 
-    def without_transformer(self, transformer) -> "ExperimentBuilder":
+    def without_transformer(self, transformer) -> "PipelineBuilder":
         steps = list(self.transformers)
         pinned = list(self.pinned)
         at = self._find_before(steps, transformer)
@@ -313,13 +271,100 @@ class ExperimentBuilder:
         pinned_fst, pinned_snd = pinned[: at - 1], pinned[at:]
         return self._evolve(transformers=fst + snd, pinned=pinned_fst + pinned_snd)
 
-    def build_transformers(self) -> Pipeline:
+    def with_regressor(
+        self, regressor: RegressorMixin, *, name: str | None = None
+    ) -> "PipelineBuilder":
+        if name is None:
+            name = type(regressor).__name__
+        return self._evolve(regressor=regressor, regressor_name=name)
+
+    def build(self) -> Pipeline:
         steps = list(self.transformers)
+        if self.regressor is not None:
+            steps.append((self.regressor_name, self.regressor))
         return clone(Pipeline(steps)).set_output(transform="polars")
 
-    def _pipeline_for(self, regressor: RegressorMixin) -> Pipeline:
-        steps = [*self.transformers, (type(regressor).__name__, regressor)]
-        return clone(Pipeline(steps)).set_output(transform="polars")
+
+class ExperimentBuilder:
+    def __init__(
+        self,
+        label: str,
+        *,
+        pipeline: PipelineBuilder | None = None,
+        regressors: Iterable[RegressorMixin] = (),
+        features: Iterable[str] = (),
+        banned: Iterable[str] = (),
+        experiment_name: str = "",
+        run_name: str = "",
+    ) -> None:
+        self.did_run: bool = False
+        self.label: str = label
+        self.banned: list[str] = list(banned)
+        self.pipeline: PipelineBuilder = (
+            pipeline if pipeline is not None else PipelineBuilder(banned=self.banned)
+        )
+        self.regressors: list[RegressorMixin] = [clone(r) for r in regressors]
+        self.features: list[str] = list(features)
+        self._experiment_name: str = experiment_name
+        self._run_name: str = run_name
+
+    def _evolve(self, **changes: Any) -> "ExperimentBuilder":
+        return ExperimentBuilder(
+            changes.get("label", self.label),
+            pipeline=changes.get("pipeline", self.pipeline),
+            regressors=changes.get("regressors", self.regressors),
+            features=changes.get("features", self.features),
+            banned=changes.get("banned", self.banned),
+            experiment_name=changes.get("experiment_name", self._experiment_name),
+            run_name=changes.get("run_name", self._run_name),
+        )
+
+    def _pruned(self, features: Iterable[str]) -> list[str]:
+        return [f for f in features if f != self.label]
+
+    def _run_name_for(self, regressor: RegressorMixin) -> str:
+        base = type(regressor).__name__
+        return f"{base}: {self._run_name}" if self._run_name else base
+
+    def with_experiment_name(self, name: str) -> "ExperimentBuilder":
+        return self._evolve(experiment_name=name)
+
+    def with_run_name(self, name: str) -> "ExperimentBuilder":
+        return self._evolve(run_name=name)
+
+    def using_regressors(self, *regressors: RegressorMixin) -> "ExperimentBuilder":
+        if len(regressors) == 1 and isinstance(regressors[0], (list, tuple)):
+            regressors = tuple(regressors[0])
+        return self._evolve(regressors=regressors)
+
+    def with_features(self, *features: str) -> "ExperimentBuilder":
+        return self._evolve(features=list(features))
+
+    def select(self, *features: str) -> "ExperimentBuilder":
+        return self._evolve(features=self._pruned(features))
+
+    def drop(self, *features: str) -> "ExperimentBuilder":
+        return self._evolve(
+            features=self._pruned(f for f in self.features if f not in features)
+        )
+
+    def ignore(self, *features: str) -> "ExperimentBuilder":
+        return self._evolve(banned=[*self.banned, *features])
+
+    def add(self, *features: str) -> "ExperimentBuilder":
+        return self._evolve(features=self._pruned([*self.features, *features]))
+
+    def with_pipeline(
+        self, builder: Callable[[PipelineBuilder], PipelineBuilder]
+    ) -> "ExperimentBuilder":
+        pipeline = builder(self.pipeline._evolve(banned=self.banned))
+        return self._evolve(pipeline=pipeline)
+
+    def build_transformers(self) -> Pipeline:
+        return self.pipeline.build()
+
+    def pipeline_for(self, regressor: RegressorMixin) -> Pipeline:
+        return self.pipeline.with_regressor(regressor).build()
 
     # copied from: https://docs.python.org/2/library/itertools.html#recipes
     @staticmethod
@@ -354,7 +399,7 @@ class ExperimentBuilder:
         Exhaustive experiment runs with different transformer combinations
         This is an expensive operation only 5 transformers results in 32 experiment runs!
         """
-        all_names = {name for name, _ in self.transformers}
+        all_names = {name for name, _ in self.pipeline.transformers}
         for one, others in conflicting.items():
             others = {others} if isinstance(others, str) else set(others)
             for name in {one, *others}:
@@ -368,12 +413,16 @@ class ExperimentBuilder:
 
         not_pinned = [
             (idx, step)
-            for idx, (step, pinned) in enumerate(zip(self.transformers, self.pinned))
+            for idx, (step, pinned) in enumerate(
+                zip(self.pipeline.transformers, self.pipeline.pinned)
+            )
             if not pinned
         ]
         pinned = [
             (idx, step)
-            for idx, (step, pinned) in enumerate(zip(self.transformers, self.pinned))
+            for idx, (step, pinned) in enumerate(
+                zip(self.pipeline.transformers, self.pipeline.pinned)
+            )
             if pinned
         ]
         if select is None:
@@ -430,9 +479,10 @@ class ExperimentBuilder:
                     current_select |= set(keep_cols)
 
             builders.append(
-                self._evolve(transformers=transformers, run_name=run_name).select(
-                    *current_select
-                )
+                self._evolve(
+                    pipeline=self.pipeline._evolve(transformers=transformers),
+                    run_name=run_name,
+                ).select(*current_select)
             )
         _ = list(
             tqdm(
@@ -448,21 +498,29 @@ class ExperimentBuilder:
             )
         )
 
-    def run_experiment(self, df: pl.DataFrame, log_model: bool = True) -> None:
+    def run_experiment(
+        self,
+        df: pl.DataFrame,
+        regressor: RegressorMixin | None = None,
+        validation: Literal["cv", "train_test"] = "cv",
+        log_model: bool = True,
+    ) -> None:
         if self.did_run:
             return
-        assert self._experiment_name, (
-            "To run an experiment you have to provide an experiment name; use with_experiment_name"
-        )
-        mlflow.set_experiment(self._experiment_name)
-        for regressor in self.regressors:
-            self._run_one(df, regressor, log_model)
+        if self._experiment_name:
+            mlflow.set_experiment(self._experiment_name)
+        if regressor is None:
+            for regressor in self.regressors:
+                self._run_one(df, regressor, validation=validation, log_model=log_model)
+        else:
+            self._run_one(df, regressor, validation=validation, log_model=log_model)
         self.did_run = True
 
     def _already_logged(self, run_name: str) -> str | None:
+        experiment_id = mlflow.tracking.fluent._get_experiment_id()
         runs = list(
             mlflow.search_runs(
-                experiment_names=[self._experiment_name],
+                experiment_ids=[experiment_id],
                 filter_string=(
                     f"attributes.run_name = '{run_name}' and attributes.status = 'FINISHED'"
                 ),
@@ -479,14 +537,21 @@ class ExperimentBuilder:
         return None
 
     def _run_one(
-        self, df: pl.DataFrame, regressor: RegressorMixin, log_model: bool = True
+        self,
+        df: pl.DataFrame,
+        regressor: RegressorMixin,
+        validation: Literal["cv", "train_test"] = "cv",
+        log_model: bool = True,
     ) -> None:
         run_name = self._run_name_for(regressor)
         if run_url := self._already_logged(self._run_name_for(regressor)):
             print(f"{run_name} already run: {run_url}")
             return
         with mlflow.start_run(run_name=run_name):
-            metrics = self._cv_scores(df, regressor, log_folds=True)
+            if validation == "cv":
+                metrics = self._cv_scores(df, regressor, log_folds=True)
+            else:
+                metrics = self._train_test_scores(df, regressor)
             mlflow.log_metrics(metrics)
             final = self._fit_full(df, regressor)
             self._log_dataset(df, final)
@@ -500,7 +565,7 @@ class ExperimentBuilder:
                 mlflow.log_metrics(metrics, model_id=info.model_id)
 
     def _fit_full(self, df: pl.DataFrame, regressor: RegressorMixin) -> Pipeline:
-        pipeline = self._pipeline_for(regressor)
+        pipeline = self.pipeline_for(regressor)
         pipeline.fit(df.select(self.features), df.select(self.label))
         return pipeline
 
@@ -516,6 +581,42 @@ class ExperimentBuilder:
         )
         mlflow.log_input(dataset, context="training")
 
+    def _log_pred_plot(
+        self, y_true: pl.DataFrame, y_pred: np.ndarray, artifact_file: str
+    ) -> None:
+        y_true = np.asarray(y_true).ravel()
+        y_pred = np.asarray(y_pred).ravel()
+        fig, ax = plt.subplots()
+        index = np.arange(len(y_true))
+        ax.plot(index, y_true, label="actual")
+        ax.plot(index, y_pred, label="predicted")
+        ax.set_xlabel("index")
+        ax.set_ylabel(self.label)
+        ax.legend()
+        mlflow.log_figure(fig, artifact_file)
+        plt.close(fig)
+
+    def _train_test_scores(
+        self, df: pl.DataFrame, regressor: RegressorMixin
+    ) -> dict[str, float]:
+        pipeline = self.pipeline_for(regressor)
+        X = df.select(self.features)
+        y = df.select([self.label, "real_obs_weather", "real_obs_power"])
+        X_train, X_test, y_train, y_test = train_test_split(X, y, shuffle=False)
+
+        y_train = y_train.select(self.label)
+        pipeline.fit(X_train, y_train)
+
+        mask = y_test["real_obs_weather"]
+        X_test, y_test = (
+            X_test.filter(mask),
+            y_test.filter(mask).select(pl.col("real_obs_power").alias(self.label)),
+        )
+
+        y_pred = pipeline.predict(X_test)
+        self._log_pred_plot(y_test, y_pred, "train_test_predictions.png")
+        return {name: fn(y_test, y_pred) for name, fn in _METRICS.items()}
+
     def _cv_scores(
         self,
         df: pl.DataFrame,
@@ -524,7 +625,7 @@ class ExperimentBuilder:
         log_folds: bool = False,
     ) -> dict[str, float]:
         cv = TimeSeriesSplit(n_splits=5)
-        pipeline = self._pipeline_for(regressor)
+        pipeline = self.pipeline_for(regressor)
         acc: dict[str, list[float]] = {name: [] for name in _METRICS}
         for i, (train_index, test_index) in enumerate(cv.split(df)):
             fold = clone(pipeline)
@@ -549,6 +650,7 @@ class ExperimentBuilder:
                             "test_size": X_test.shape[0],
                         }
                     )
+                    self._log_pred_plot(y_test, y_pred, "fold_predictions.png")
 
         summary: dict[str, float] = {}
         for name, values in acc.items():

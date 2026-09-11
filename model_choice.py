@@ -21,7 +21,7 @@ def _():
     )
     from sklearn.impute import SimpleImputer
     from sklearn.linear_model import LinearRegression
-    from sklearn.svm import SVR
+    from sklearn.svm import SVR, LinearSVR
     from sklearn.neural_network import MLPRegressor
     from sklearn.model_selection import TimeSeriesSplit
     from sklearn.ensemble import HistGradientBoostingRegressor
@@ -50,6 +50,7 @@ def _():
         FunctionTransformer,
         HistGradientBoostingRegressor,
         LinearRegression,
+        LinearSVR,
         MLPRegressor,
         OneHotEncoder,
         SVR,
@@ -64,7 +65,7 @@ def _():
 
 @app.cell
 def _(mlflow):
-    mlflow.sklearn.autolog()
+    mlflow.sklearn.autolog(log_models=False)
     mlflow.set_tracking_uri("http://127.0.0.1:5000")
     return
 
@@ -97,11 +98,12 @@ def _():
 
 @app.cell
 def _(pl):
+    every = "1m"
     power_df = (
         pl.read_csv("data/power.csv", try_parse_dates=True)
         .select(["time", "Total"])
         .sort("time")
-        .group_by_dynamic("time", every="1h")
+        .group_by_dynamic("time", every=every)
         .agg(
             pl.col("Total").mean(),
             pl.col("Total").first().alias("real_obs_power"),
@@ -111,23 +113,9 @@ def _(pl):
         pl.read_csv("data/weather.csv", try_parse_dates=True)
         .select(["time", "Speed", "Direction"])
         .sort("time")
-        # .with_columns(
-        #    pl.col("Direction")
-        #    .replace_strict(dir_2_deg, return_dtype=pl.Float64)
-        #    .radians()
-        #    .alias("rad"),
-        # )
-        # .with_columns(
-        #    pl.col("rad").sin().alias("dir_sin"),
-        #    pl.col("rad").cos().alias("dir_cos"),
-        # )
-        # .drop(["rad"])
         .with_columns(real_obs_weather=True)
-        .upsample("time", every="1h")
+        .upsample("time", every=every)
         .with_columns(
-            # pl.col("Direction").forward_fill(),
-            # pl.col("dir_sin").interpolate(),
-            # pl.col("dir_cos").interpolate(),
             pl.col("Speed").interpolate(),
             pl.col("real_obs_weather").fill_null(False),
         )
@@ -148,27 +136,29 @@ def _(ExperimentBuilder, TimeFeatures):
         ExperimentBuilder(label="Total")
         .ignore("real_obs_weather")
         .with_features("time", "Speed", "Direction")
-        .with_transformer(
-            name="time feature engineering",
-            transformer=TimeFeatures(),
+        .with_pipeline(
+            lambda p: p.with_transformer(
+                name="time feature engineering",
+                transformer=TimeFeatures(),
+            )
+            # .with_transformer(
+            #    name="direction encoding",
+            #    transformer=OneHotEncoder(
+            #        categories=[dirs],
+            #        sparse_output=False, handle_unknown="ignore"
+            #    ),
+            #    select="Direction",
+            # )
+            # .with_transformer(
+            #    name="Speed trans",
+            #    transformer=FunctionTransformer(
+            #        func=lambda x: x.with_columns(
+            #            speed_sq=pl.col("Speed") ** 2,
+            #            speed_cu=pl.col("Speed") ** 3,
+            #        )
+            #    ),
+            # )
         )
-        # .with_transformer(
-        #    name="direction encoding",
-        #    transformer=OneHotEncoder(
-        #        categories=[dirs],
-        #        sparse_output=False, handle_unknown="ignore"
-        #    ),
-        #    select="Direction",
-        # )
-        # .with_transformer(
-        #    name="Speed trans",
-        #    transformer=FunctionTransformer(
-        #        func=lambda x: x.with_columns(
-        #            speed_sq=pl.col("Speed") ** 2,
-        #            speed_cu=pl.col("Speed") ** 3,
-        #        )
-        #    ),
-        # )
     )
     return (builder,)
 
@@ -209,12 +199,14 @@ def _(builder, joined_df, regressors):
 def _(OneHotEncoder, builder, dirs, joined_df, regressors):
     (
         builder.using_regressors(*regressors)
-        .with_transformer(
-            name="direction encoding",
-            transformer=OneHotEncoder(
-                categories=[dirs], sparse_output=False, handle_unknown="ignore"
-            ),
-            select="Direction",
+        .with_pipeline(
+            lambda p: p.with_transformer(
+                name="direction encoding",
+                transformer=OneHotEncoder(
+                    categories=[dirs], sparse_output=False, handle_unknown="ignore"
+                ),
+                select="Direction",
+            )
         )
         .with_experiment_name("Compare feature engineering")
         .with_run_name("Using OneHotEncoder")
@@ -228,14 +220,16 @@ def _(FunctionTransformer, builder, joined_df, pl, regressors):
     (
         builder.using_regressors(*regressors)
         .drop("Direction")
-        .with_transformer(
-            name="Speed trans",
-            transformer=FunctionTransformer(
-                func=lambda x: x.with_columns(
-                    speed_sq=pl.col("Speed") ** 2,
-                    speed_cu=pl.col("Speed") ** 3,
-                )
-            ),
+        .with_pipeline(
+            lambda p: p.with_transformer(
+                name="Speed trans",
+                transformer=FunctionTransformer(
+                    func=lambda x: x.with_columns(
+                        speed_sq=pl.col("Speed") ** 2,
+                        speed_cu=pl.col("Speed") ** 3,
+                    )
+                ),
+            )
         )
         .with_experiment_name("Compare feature engineering")
         .with_run_name("with speed trans")
@@ -256,45 +250,25 @@ def _(
 ):
     (
         builder.using_regressors(*regressors)
-        .with_transformer(
-            name="direction encoding",
-            transformer=OneHotEncoder(
-                categories=[dirs], sparse_output=False, handle_unknown="ignore"
-            ),
-            select="Direction",
-        )
-        .with_transformer(
-            name="Speed trans",
-            transformer=FunctionTransformer(
-                func=lambda x: x.with_columns(
-                    speed_sq=pl.col("Speed") ** 2,
-                    speed_cu=pl.col("Speed") ** 3,
-                )
-            ),
+        .with_pipeline(
+            lambda p: p.with_transformer(
+                name="direction encoding",
+                transformer=OneHotEncoder(
+                    categories=[dirs], sparse_output=False, handle_unknown="ignore"
+                ),
+                select="Direction",
+            ).with_transformer(
+                name="Speed trans",
+                transformer=FunctionTransformer(
+                    func=lambda x: x.with_columns(
+                        speed_sq=pl.col("Speed") ** 2,
+                        speed_cu=pl.col("Speed") ** 3,
+                    )
+                ),
+            )
         )
         .with_experiment_name("Compare feature engineering")
         .with_run_name("Using OneHotEncoder and speed trans")
-        .run_experiment(joined_df)
-    )
-    return
-
-
-@app.cell
-def _(FunctionTransformer, builder, joined_df, pl, regressors):
-    (
-        builder.using_regressors(*regressors)
-        .drop("Direction", "dir_sin", "dir_cos")
-        .with_transformer(
-            name="Speed trans",
-            transformer=FunctionTransformer(
-                func=lambda x: x.with_columns(
-                    speed_sq=pl.col("Speed") ** 2,
-                    speed_cu=pl.col("Speed") ** 3,
-                )
-            ),
-        )
-        .with_experiment_name("Compare feature engineering")
-        .with_run_name("with speed trans without sin cos")
         .run_experiment(joined_df)
     )
     return
@@ -305,6 +279,10 @@ def _(
     ColumnTransformerBuilder,
     ExperimentBuilder,
     FunctionTransformer,
+    HistGradientBoostingRegressor,
+    LinearRegression,
+    LinearSVR,
+    MLPRegressor,
     OneHotEncoder,
     SimpleImputer,
     StandardScaler,
@@ -314,7 +292,6 @@ def _(
     joined_df,
     numeric_columns,
     pl,
-    regressors,
 ):
     def build_rolling_mean_transformer(
         builder: ColumnTransformerBuilder,
@@ -391,9 +368,14 @@ def _(
             transformer=StandardScaler(),
             select=numeric_columns,
         )
-        .using_regressors(*regressors)
+        .using_regressors(
+            LinearRegression(),
+            HistGradientBoostingRegressor(),
+            LinearSVR(),  # cannot use standard svr due to dataset size when resampled to 1m
+            MLPRegressor(),
+        )
         .with_experiment_name(
-            "Exhaustive search",
+            "Exhaustive search 1 minute resampling",
         )
         .exhaustive(
             joined_df,
