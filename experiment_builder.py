@@ -432,7 +432,7 @@ class ExperimentBuilder:
         else:
             base_select = set(select)
 
-        builders: list["ExperimentBuilder"] = []
+        # builders: list["ExperimentBuilder"] = []
         for subset in self._powerset(not_pinned):
             # a stack could be used but I cannot bother
             q: deque[tuple[int, Step]] = deque(subset)
@@ -478,25 +478,32 @@ class ExperimentBuilder:
                         keep_cols = [keep_cols]
                     current_select |= set(keep_cols)
 
-            builders.append(
-                self._evolve(
-                    pipeline=self.pipeline._evolve(transformers=transformers),
-                    run_name=run_name,
-                ).select(*current_select)
-            )
-        _ = list(
-            tqdm(
-                Parallel(
-                    n_jobs=n_jobs, backend="loky", return_as="generator_unordered"
-                )(
-                    delayed(self._run_worker)(
-                        b, df, mlflow.get_tracking_uri(), log_model
-                    )
-                    for b in builders
-                ),
-                total=len(builders),
-            )
-        )
+            # builders.append(
+            #    self._evolve(
+            #        pipeline=self.pipeline._evolve(transformers=transformers),
+            #        run_name=run_name,
+            #    ).select(*current_select)
+            # )
+            builder = self._evolve(
+                pipeline=self.pipeline._evolve(transformers=transformers),
+                run_name=run_name,
+            ).select(*current_select)
+
+            self._run_worker(builder, df, mlflow.get_tracking_uri(), log_model)
+
+        # _ = list(
+        #    tqdm(
+        #        Parallel(
+        #            n_jobs=n_jobs, backend="loky", return_as="generator_unordered"
+        #        )(
+        #            delayed(self._run_worker)(
+        #                b, df, mlflow.get_tracking_uri(), log_model
+        #            )
+        #            for b in builders
+        #        ),
+        #        total=len(builders),
+        #    )
+        # )
 
     def run_experiment(
         self,
