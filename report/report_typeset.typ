@@ -2,6 +2,7 @@
 #import "@preview/wordometer:0.1.5": total-words, word-count
 
 #show: word-count.with(exclude: (raw,))
+#set table.hline(stroke: 0.5pt)
 
 #show: ieee.with(
   title: [Utilizing weather forecasts for power output prediction],
@@ -33,7 +34,7 @@ Since ML and MLOps is such an established field, multiple frameworks and librari
 
 Most of the libraries are for convenience, however, we should specifically highlight the use of `sklearn` @scikit-learn, a very common ML library, and the usage of `mlflow` @mlflow, a tool for comparing and versioning models.
 
-The main discovery process has been in a python notebook, with models and model metrics being logged to `mlflow`. The process included building a meta-framework for automating experiments, and for building "immutable" pipelines#footnote([The pipeline itself is not immutable, nothing in python is. The intended interaction with the builder is done in such a way that changes to the current workflow is immutable. This is especially useful for multiprocessing]).
+The main discovery process has been in a python notebook, with models and model metrics being logged to `mlflow`. The process included building a meta-framework for automating experiments, and for building "immutable" pipelines#footnote([The pipeline itself is not immutable, nothing in python is. The intended interaction with the builder is done in such a way that changes to the current workflow is immutable. This is especially useful for multiprocessing]). The main purpose of this meta-framework was to (1) make pipeline updates simple and immutable, (2) making experiments easy and exhaustive. As it can be hard to figure out whats the best combination of tranformers/regressors, the main method employed in this project is doing exhaustive search on pipelines. Each of these runs are recorded to mlflow, where we can view the properties of individual runs.
 //This initial discovery process was for previewing different models on a simple dataset. After this initial discovery process, the main focus was improve the best model. This was both done through feature engineering and hyperparameter tuning. The tuning was done through `optuna` @akiba2019optuna, which is a hyperparameter tuning framework.
 
 Both feature transformations/engineering, and the model itself, is placed in a single pipeline. This means that model fitting and predictions are reproducible, and simple. The only step which is not in the pipeline is the data-re-sampling. The reason for this is that `sklearn` is not made for re-sampling the label #footnote([The `sklearn.Pipeline` is actually not made for re-sampling in general, for this the `imblearn.Pipeline` could be used, however I found this out of scope for the project.]).
@@ -46,33 +47,57 @@ One of the main issues with the two datasets is the different cardinality and re
 The approach that best balances dataset distributions is to re-sample to 1-hour intervals. Upsampling is done by interpolating between actual data points, assuming wind speed changes smoothly, while direction is interpolated via forward filling. Downsampling is done by grouping the power dataset by hour and taking the mean of total power output.
 #figure(
   image("./figures/power-distribution.png", width: 70%),
-  caption: [Total power output distribution (Gaussian KDE) before and after down-sampling to a 1-hour interval (Mean)],
+  caption: [Total power output distribution (Gaussian KDE) before and after down-sampling to a 1-hour interval (Mean over 1-hour frame)],
 )
+As we see, this down-sampling causes an increase in the 30 MW range and in the 15 MW range. This is most likely some large values affecting the mean #footnote([This can be corrected for using the median, however this minimally worsens the R2 score of the models.]).
 
 #figure(
   image("./figures/wind-distribution.png", width: 70%),
   caption: [Wind speed distribution (Gaussian KDE) before and after re-sampling to a 1-hour interval (Linear interpolation)],
 )
 
+The wind speed seems minimally affected by the up-sampling, only causing some smoothing in the distribution, this makes sense as we're doing linear interpolation.
 #figure(
   image("./figures/direction-distribution.png", width: 70%),
   caption: [Direction class counts before and after re-sampling to a 1-hour interval (forward fill)],
 )
 
+Directions are forward filled, thus there is almost no difference between the raw dataset and the upsampled one. The main reason for the small difference is that there exists two gaps which are larger than 3 hours.
+#figure(
+  table(
+    columns: 2,
+    stroke: none,
+    table.header(
+      table.hline(),
+      [Measurement gaps], [count],
+      table.hline(),
+    ),
+    [3h], [713],
+    [6h], [1],
+    [12h], [1],
+  ),
+)
+
+Thus this causes some over-representation of some classes, we avoid this problem by ignoring it#footnote([The over-representation is minimal, I conjecture that this problem is not worth chasing.]).
+
 //The approach which maintains most of the variance of the dataset, is upsampling the wind data to minute granularity. The sum of the standard deviations of wind speed an total power output, is in the original dataset $~15.90$, with the sum of the re-sampled standard deviations being $~15.85$. A more balanced approach is to re-sample the data to hour granularity, however this does not maintain as much of the variance $~15.65$.
 
 = Data preprocessing <sec:preprocessing>
+Due to the main methodology of doing exhaustive pipeline runs, multiple approaches have been taken, which may or may not end up in the optimal pipeline. This section will describe the approaches taken.
 
 == Train/test split <sec:split>
-The data-splitting was done using Cross-Validation (CV). When using CV the number of folds chosen were 3, 5 and 8; however when optimizing the hyperparameters, the 5 splits were chosen, while the two other splits are metrics logged. The reason for this split is a bit arbitrary, but when testing it was a nice balance between having large sets to train the model on, while also having sufficient testing data. The method used is the `TimeSeriesSplit` which trains the model in increasing order. The reason for using this, is when using regular splitting, it is done randomly, we do not want to do this as the data is temporally dependent, i.e. $t$ is dependent on $t-1$.
+The data-splitting was done using Cross-Validation (CV). When using CV the number of folds chosen were 5. The main reason for this is that this is what `TimeSeriesSplit` defaults to. Other splits were tested, such as `ShuffleSplit` and `GroupShuffleSplit`, however model performance got suspiciously good, suggesting data leakage. Using a time series split is also representational of the real world usage on the model; we use previous data points to predict future data.
 
 == Missing values <sec:missing>
 The dataset does not have any null values, any introduced are by doing joins and re-sampling, which have been described above.
 
 == Wind direction encoding <sec:direction>
-The need to handle direction encoding, differs by the model which is chosen. For a linear regression model, which does not have built in support for categorical data, we can encode the direction into sinus and cosinus. The main problem here being that linear models does not handle non-linear data well. I chose to go with boosted trees for my main model, specifically the `sklearn.ensemble.HistGradientBoostRegressor`. This has native support for categorical data. However the categories does not really represent the circular dependency of the data, i.e. which directions are close to each other. I therefore complimented it with the direction encoding, however, for boosted trees, it did not seem to make much of a difference.
+Two methods of direction encoding have been employed and tested. The first method is using a `OneHotEncoder`, which encodes categorical data by pivoting the categories to binary columns. The other method is encoding the directions to degrees and extracting sin and cos from those degrees. Since the compass is split into 16 classes, we have $360/16=22.5 degree$. This just accumulates the further we go around the compass.
+
+//The need to handle direction encoding, differs by the model which is chosen. For a linear regression model, which does not have built in support for categorical data, we can encode the direction into sinus and cosinus. The main problem here being that linear models does not handle non-linear data well. I chose to go with boosted trees for my main model, specifically the `sklearn.ensemble.HistGradientBoostRegressor`. This has native support for categorical data. However the categories does not really represent the circular dependency of the data, i.e. which directions are close to each other. I therefore complimented it with the direction encoding, however, for boosted trees, it did not seem to make much of a difference.
 == Feature scaling <sec:scaling>
-With a linear regression pipeline, it can make a lot of sense to to scale features, as is changes the properties of how the curve is fitted. However since I ended up using boosted trees, this benefit is no longer there. The reason is that boosted trees makes a series of "splits", meaning that monotonic transformations (such as scaling) have no real impact.
+With linear models it can make sense to scale features as some feature might skew the MSE, causing other features to be undermined. To do this a `StandardScaler` was applied, however it did not seem to give any advantage to the best model.
+//With a linear regression pipeline, it can make a lot of sense to to scale features, as is changes the properties of how the curve is fitted. However since I ended up using boosted trees, this benefit is no longer there. The reason is that boosted trees makes a series of "splits", meaning that monotonic transformations (such as scaling) have no real impact.
 
 
 = Model training and evaluation <sec:modeling>
@@ -80,10 +105,16 @@ With a linear regression pipeline, it can make a lot of sense to to scale featur
 == Models <sec:models>
 // The >= 2 regression models chosen (RidgeCV, HistGradientBoostingRegressor) and why.
 
-Two models were chosen based on a baseline performance on the simple data
+Four models were evaluated against each other during the exhaustive runs.
+- A linear regressions model, `LinearRegression`
+- A tree based model, `HistGradientBoostingRegressor`
+- A support vector machine based model, `SVR`
+- A multi layer perceptron model, `MLPRegressor`
+
+The choice of these models are a bit arbitrary but they try the main types of models on the data. An important note is that training `SVR` on large datasets is painfully slow, meaning that it is impractical to use when upsampling data to minute granularity. Thus for this specific instance the `LinearSVR` was chosen.
 
 == Evaluation metrics <sec:metrics>
-// Regression metrics reported (R2, RMSE, MAE, MSE) and how they are aggregated over folds.
+The main metrics used to evaluate these models is the mean $R^2$ score of 5 CV folds. Other supporting metrics are mean _RMSE_ and mean _MAE_. As well as best and worst of each respectively. $R^2$ explains the proportion of variance which is explained by the model. An $R^2$ score of 0 is no better than just using the mean, 1 is a perfect fit, and a negative value means the model is worse than just using the mean.
 
 == Future predictions <sec:future>
 // Using future.csv to generate forecasts and confirm the model runs on unseen data.
