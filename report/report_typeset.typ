@@ -36,14 +36,28 @@ Most of the libraries are for convenience, however, we should specifically highl
 The main discovery process has been in a python notebook, with models and model metrics being logged to `mlflow`. The process included building a meta-framework for automating experiments, and for building "immutable" pipelines#footnote([The pipeline itself is not immutable, nothing in python is. The intended interaction with the builder is done in such a way that changes to the current workflow is immutable. This is especially useful for multiprocessing]).
 //This initial discovery process was for previewing different models on a simple dataset. After this initial discovery process, the main focus was improve the best model. This was both done through feature engineering and hyperparameter tuning. The tuning was done through `optuna` @akiba2019optuna, which is a hyperparameter tuning framework.
 
-Both feature transformations/engineering, and the model itself, is placed in a single pipeline. This means that model fitting and predictions are reproducible, and simple. The only step which is not in the pipeline is the data-resampling. The reason for this is that `sklearn` is not made for resampling the label #footnote([The `sklearn.Pipeline` is actually not made for resampling in general, for this the `imblearn.Pipeline` could be used, however I found this out of scope for the project.]).
+Both feature transformations/engineering, and the model itself, is placed in a single pipeline. This means that model fitting and predictions are reproducible, and simple. The only step which is not in the pipeline is the data-re-sampling. The reason for this is that `sklearn` is not made for re-sampling the label #footnote([The `sklearn.Pipeline` is actually not made for re-sampling in general, for this the `imblearn.Pipeline` could be used, however I found this out of scope for the project.]).
 
 
 = Data alignment <sec:alignment>
 //Data was loaded in using using the `read_csv` function from `polars` which is a popular dataframe library.
 One of the main issues with the two datasets is the different cardinality and resolution. This being because the power dataset is sampled every minute, but the wind dataset is sampled every three hours. There are multiple ways of addressing this; either downsample the power dataset to match the 3 hour interval, or upsample the wind dataset to match the minute interval. Or do something in-between. The main benefit of downsampling is that we match the data to the least common denominator, i.e. we're not creating any data or making any assumptions about its shape. This however comes at the cost of the amount of training data as-well as the granularity of the predictions. Upsampling is the opposite of this, we need to make assumptions about the data's shape, however we end up getting more data and predictions can be made with higher granularity #footnote([Granularity here being the precision of the prediction, if the model has been trained on hourly data, it will be hard to predict what will happen the next second.]).
 
-The approach which ascertains a good balance between dataset distributions, is to choose the re-sampling to 1 hour. The upsampling is done by interpolating between actual data points, which assumes that wind speed changes smoothly, direction is interpolated via forward filling. The downsampling is done by grouping the power dataset by hours and taking the mean of the total power output.
+The approach that best balances dataset distributions is to re-sample to 1-hour intervals. Upsampling is done by interpolating between actual data points, assuming wind speed changes smoothly, while direction is interpolated via forward filling. Downsampling is done by grouping the power dataset by hour and taking the mean of total power output.
+#figure(
+  image("./figures/power-distribution.png", width: 70%),
+  caption: [Total power output distribution (Gaussian KDE) before and after down-sampling to a 1-hour interval (Mean)],
+)
+
+#figure(
+  image("./figures/wind-distribution.png", width: 70%),
+  caption: [Wind speed distribution (Gaussian KDE) before and after re-sampling to a 1-hour interval (Linear interpolation)],
+)
+
+#figure(
+  image("./figures/direction-distribution.png", width: 70%),
+  caption: [Direction class counts before and after re-sampling to a 1-hour interval (forward fill)],
+)
 
 //The approach which maintains most of the variance of the dataset, is upsampling the wind data to minute granularity. The sum of the standard deviations of wind speed an total power output, is in the original dataset $~15.90$, with the sum of the re-sampled standard deviations being $~15.85$. A more balanced approach is to re-sample the data to hour granularity, however this does not maintain as much of the variance $~15.65$.
 
