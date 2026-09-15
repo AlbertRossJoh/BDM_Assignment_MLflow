@@ -118,6 +118,10 @@ The main metrics used to evaluate these models is the mean $R^2$ score of 5 CV f
 
 == Future predictions <sec:future>
 // Using future.csv to generate forecasts and confirm the model runs on unseen data.
+#figure(
+  image("./figures/total-forecast.png"),
+  caption: [Forecast for future total power output (MW) based on weather forecast data],
+)
 
 = Experiment tracking with MLflow <sec:tracking>
 // Parameters, metrics and artifacts logged; how experiments and runs are organised.
