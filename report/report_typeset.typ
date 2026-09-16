@@ -35,7 +35,6 @@ Since ML and MLOps is such an established field, multiple frameworks and librari
 Most of the libraries are for convenience, however, we should specifically highlight the use of `sklearn` @scikit-learn, a very common ML library, and the usage of `mlflow` @mlflow, a tool for comparing and versioning models.
 
 The main discovery process has been in a python notebook, with models and model metrics being logged to `mlflow`. The process included building a meta-framework for automating experiments, and for building "immutable" pipelines#footnote([The pipeline itself is not immutable, nothing in python is. The intended interaction with the builder is done in such a way that changes to the current workflow is immutable. This is especially useful for multiprocessing]). The main purpose of this meta-framework was to (1) make pipeline updates simple and immutable, (2) making experiments easy and exhaustive. As it can be hard to figure out whats the best combination of tranformers/regressors, the main method employed in this project is doing exhaustive search on pipelines. Exhaustive search in this instance means, building a pipeline with different transformers, and trying all valid#footnote([Some pipeline steps are not compatible, e.g. providing both direction encoded as sin/cos and using the `OneHotEncoder` does not make much sense]) combinations. Each of these combinations are then tried on multiple regressors, thus we exhaustively try all possible combinations of transformers and regressors. Each of these runs are recorded to mlflow, where we can view the properties of individual runs. For an example of the exhaustive pipelines see #link(<appendix:exhaustive>)[Appendix A].
-//This initial discovery process was for previewing different models on a simple dataset. After this initial discovery process, the main focus was improve the best model. This was both done through feature engineering and hyperparameter tuning. The tuning was done through `optuna` @akiba2019optuna, which is a hyperparameter tuning framework.
 
 Both feature transformations/engineering, and the model itself, is placed in a single pipeline. This means that model fitting and predictions are reproducible, and simple. The only step which is not in the pipeline is the data-re-sampling#footnote([The `sklearn.Pipeline` is not made for re-sampling in general, for this the `imblearn.Pipeline` could be used, however I found this out of scope for the project.]).
 
@@ -86,7 +85,7 @@ Thus this causes some over-representation of some classes, we avoid this problem
 Due to the main methodology of doing exhaustive pipeline runs, multiple approaches have been taken, which may or may not end up in the optimal pipeline. This section will describe the approaches taken.
 
 == Train/test split <sec:split>
-The data-splitting was done using Cross-Validation (CV). When using CV the number of folds chosen were 5. The main reason for this is that this is what `TimeSeriesSplit` defaults to. Other splits were tested, such as `ShuffleSplit` and `GroupShuffleSplit`, however model performance got suspiciously good, suggesting data leakage. Using a time series split is also representational of the real world usage on the model, i.e. we use previous data points to predict future data. One issue with doing interpolation in combination with CV is that the split might land on interpolated features, these are auto-correlated, meaning that the model was actually trained on data which is in the test set.
+The data-splitting was done using Cross-Validation (CV). When using CV the number of folds chosen were 5. The main reason for this is that this is what `TimeSeriesSplit` defaults to. Other splits were tested, such as `ShuffleSplit` and `GroupShuffleSplit`, however model performance got suspiciously good, suggesting data leakage. Using a time series split is also representational of the real world usage on the model, i.e. we use previous data points to predict future data. One issue with doing interpolation in combination with CV is that the split might land on interpolated features, these are auto-correlated, meaning that the model was actually trained on data which is in the test set. To fix this splits are always performed on real samples, omitting any data which goes across the train test boundary. To further complicate the matter, I would only like to test on real observations, this means that I have to retroactively find the real observations when computing the test score. This is done with a flag, and a column containing the real value and not the aggregate.
 
 == Missing values <sec:missing>
 The dataset does not have any null values, any introduced are by doing joins and re-sampling, which have been described in @sec:alignment.
@@ -147,20 +146,18 @@ MLFLOW_TRACKING_URI=http://127.0.0.1:5000 mlflow models serve -m "models:/SVR po
 ```
 The console output from this command can be seen in #link(<appendix:serve>)[Appendix D].
 The curl and the model response can be seen in #link(<appendix:curl>)[Appendix E].
-= Reproducibility with MLflow Projects <sec:reproducibility>
-// Packaging training as an MLProject (entry points, MLproject file).
-// Environment file (python_env.yaml + requirements.txt, @requirements).
-// Demonstrating a from-scratch run on another machine via `mlflow run`.
 
 = Reflection <sec:reflection>
 
 == Training data window size <sec:window>
 // Discussion of the training window (e.g. 90 days) and its effect.
+The window size is only 90 days, with the current upsampling this produces roughly 2160 rows. With a 5 fold split, this means that each fold adds only a small amount of data. This could cause the model to not have enough training data to properly generalize. This claim could be supported by the fact that from fold 2 the model performance increases with more data. However I would say that this claim is on shaky ground at best. Another point is that there could be seasonal patterns which would not be shown in the data, since it only contains a subset of the year. As-is when utilizing time within the training data, it seems to hurt the model more than it helps. If there was two years of training data there could be a hidden signal in the time and day of the year, but there is no way to be sure.
 
 == Limitations and improvements <sec:limitations>
 // Limitations of the approach and concrete potential improvements.
 
-= Conclusion <sec:conclusion>
+
+//= Conclusion <sec:conclusion>
 
 = Use of generative AI <sec:ai>
 Anthropic's Claude @claude was used during this project as a coding assistant and a sounding board. Concretely it helped scaffold, refactor and debug parts of the pipeline code#footnote([Specifically used for `matplotlib` plotting, refactoring some of the Experiment builder code and miscellaneous debugging]). All generated code and text were reviewed, tested, and edited by the author, who takes full responsibility for the final submission. Model selection, feature-engineering decisions, and interpretation of the results are the author's own.
