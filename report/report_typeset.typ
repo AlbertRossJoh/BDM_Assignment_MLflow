@@ -23,25 +23,24 @@
 )
 
 = Introduction
-In 2020 the Orkney islands generated 128% of their electricity needs from renewables @orkney where bulk of this power generation, came from wind turbines @orkney-renewables. Orkney currently has limitations with their grid, as export is constrained to the capacity of two subsea cables @orkney. For this reason, short-term forecasts of power generated from wind-energy could be desirable. The main focus of this report is building a reproducible machine learning pipeline that predicts total power output, given a forecast of wind speed and direction.
+In 2020, the Orkney islands generated 128% of their electricity needs from renewables @orkney, where the bulk of this power generation came from wind turbines @orkney-renewables. Orkney currently has limitations with their grid, as export is constrained to the capacity of two subsea cables @orkney. For this reason, short-term forecasts of power generated from wind-energy could be desirable. The main focus of this report is building a reproducible machine learning pipeline that predicts total power output, given a forecast of wind speed and direction.
 
-The data in question is a 90 day frame of wind speed and direction with another dataset showing the amount of power generated through wind turbines.
+The data in question is a 90-day frame of wind speed and direction with another dataset showing the amount of power generated through wind turbines.
 
-== Overview
 = Methodology <sec:methods>
 
-Since ML and MLOps is such an established field, multiple frameworks and libraries exist in order to make the life of the engineer easier. All runtime dependencies are version-pinned @requirements #footnote([The `uv` package manager was actually used for development, but MLFlow does not seem to support this in the MLproject file, thus a seperate requirements file exists.]), which `python_env.yaml` installs into the isolated environment that `mlflow run` builds, so the pipeline reproduces from a clean checkout on another machine.
+Since ML and MLOps is such an established field, multiple frameworks and libraries exist in order to make the life of the engineer easier. All runtime dependencies are version-pinned @requirements #footnote([The `uv` package manager was actually used for development, but MLflow does not seem to support this in the MLproject file, thus a separate requirements file exists.]), which `python_env.yaml` installs into the isolated environment that `mlflow run` builds, so the pipeline reproduces from a clean checkout on another machine.
 
 Most of the libraries are for convenience, however, we should specifically highlight the use of `sklearn` @scikit-learn, a very common ML library, and the usage of `mlflow` @mlflow, a tool for comparing and versioning models.
 
-The main discovery process has been in a python notebook, with models and model metrics being logged to `mlflow`. The process included building a meta-framework for automating experiments, and for building "immutable" pipelines#footnote([The pipeline itself is not immutable, nothing in python is. The intended interaction with the builder is done in such a way that changes to the current workflow is immutable. This is especially useful for multiprocessing]). The main purpose of this meta-framework was to (1) make pipeline updates simple and immutable, (2) making experiments easy and exhaustive. As it can be hard to figure out whats the best combination of tranformers/regressors, the main method employed in this project is doing exhaustive search on pipelines. Exhaustive search in this instance means, building a pipeline with different transformers, and trying all valid#footnote([Some pipeline steps are not compatible, e.g. providing both direction encoded as sin/cos and using the `OneHotEncoder` does not make much sense]) combinations. Each of these combinations are then tried on multiple regressors, thus we exhaustively try all possible combinations of transformers and regressors. Each of these runs are recorded to mlflow, where we can view the properties of individual runs. For an example of the exhaustive pipelines see #link(<appendix:exhaustive>)[Appendix A].
+The main discovery process has been in a python notebook, with models and model metrics being logged to `mlflow`. The process included building a meta-framework for automating experiments, and for building "immutable" pipelines#footnote([The pipeline itself is not immutable, nothing in python is. The intended interaction with the builder is done in such a way that changes to the current workflow is immutable. This is especially useful for multiprocessing]). The main purpose of this meta-framework was to (1) make pipeline updates simple and immutable, (2) making experiments easy and exhaustive. As it can be hard to figure out what's the best combination of transformers/regressors, the main method employed in this project is doing exhaustive search on pipelines. Exhaustive search in this instance means, building a pipeline with different transformers, and trying all valid#footnote([Some pipeline steps are not compatible, e.g. providing both direction encoded as sin/cos and using the `OneHotEncoder` does not make much sense]) combinations. Each of these combinations are then tried on multiple regressors, thus we exhaustively try all possible combinations of transformers and regressors. Each of these runs are recorded to mlflow, where we can view the properties of individual runs. For an example of the exhaustive pipelines see #link(<appendix:exhaustive>)[Appendix A].
 
-Both feature transformations/engineering, and the model itself, is placed in a single pipeline. This means that model fitting and predictions are reproducible, and simple. The only step which is not in the pipeline is the data-re-sampling#footnote([The `sklearn.Pipeline` is not made for re-sampling in general, for this the `imblearn.Pipeline` could be used, however I found this out of scope for the project.]).
+Both feature transformations/engineering, and the model itself, is placed in a single pipeline. This means that model fitting and predictions are reproducible and simple. The only step which is not in the pipeline is the data-re-sampling#footnote([The `sklearn.Pipeline` is not made for re-sampling in general, for this the `imblearn.Pipeline` could be used, however I found this out of scope for the project.]).
 
 
 = Data alignment <sec:alignment>
 //Data was loaded in using using the `read_csv` function from `polars` which is a popular dataframe library.
-One of the main issues with the two datasets is the different cardinality and resolution. This being because the power dataset is sampled every minute, but the wind dataset is sampled every three hours. There are multiple ways of addressing this; either downsample the power dataset to match the 3 hour interval, or upsample the wind dataset to match the minute interval. Or do something in-between. The main benefit of downsampling is that we match the data to the least common denominator, i.e. we're not creating any data or making any assumptions about its shape. This however comes at the cost of the amount of training data as-well as the granularity of the predictions. Upsampling is the opposite of this, we need to make assumptions about the data's shape, however we end up getting more data and predictions can be made with higher granularity #footnote([Granularity here being the precision of the prediction, if the model has been trained on hourly data, it will be hard to predict what will happen the next second.]).
+One of the main issues with the two datasets is the different cardinality and resolution. This being because the power dataset is sampled every minute, but the wind dataset is sampled every three hours. There are multiple ways of addressing this; either downsample the power dataset to match the 3 hour interval, or upsample the wind dataset to match the minute interval. Or do something in-between. The main benefit of downsampling is that we match the data to the least common denominator, i.e. we're not creating any data or making any assumptions about its shape. This, however, comes at the cost of the amount of training data as well as the granularity of the predictions. Upsampling is the opposite of this: we need to make assumptions about the data's shape, however, we end up getting more data and predictions can be made with higher granularity #footnote([Granularity here being the precision of the prediction, if the model has been trained on hourly data, it will be hard to predict what will happen the next second.]).
 
 The approach that best balances dataset distributions is to re-sample to 1-hour intervals. Upsampling is done by interpolating between actual data points, assuming wind speed changes smoothly, while direction is interpolated via forward filling. Downsampling is done by grouping the power dataset by hour and taking the mean of total power output.
 #figure(
@@ -55,7 +54,7 @@ As we see, this down-sampling causes an increase in the 30 MW range and in the 1
   caption: [Wind speed distribution (Gaussian KDE) before and after re-sampling to a 1-hour interval (Linear interpolation)],
 )
 
-The wind speed seems minimally affected by the up-sampling, only causing some smoothing in the distribution, this makes sense as we're doing linear interpolation.
+The wind speed seems minimally affected by the up-sampling, only causing some smoothing in the distribution; this makes sense as we're doing linear interpolation.
 #figure(
   image("./figures/direction-distribution.png", width: 70%),
   caption: [Direction class counts before and after re-sampling to a 1-hour interval (forward fill)],
@@ -85,7 +84,7 @@ Thus this causes some over-representation of some classes, we avoid this problem
 Due to the main methodology of doing exhaustive pipeline runs, multiple approaches have been taken, which may or may not end up in the optimal pipeline. This section will describe the approaches taken.
 
 == Train/test split <sec:split>
-The data-splitting was done using Cross-Validation (CV). When using CV the number of folds chosen were 5. The main reason for this is that this is what `TimeSeriesSplit` defaults to. Other splits were tested, such as `ShuffleSplit` and `GroupShuffleSplit`, however model performance got suspiciously good, suggesting data leakage. Using a time series split is also representational of the real world usage on the model, i.e. we use previous data points to predict future data. One issue with doing interpolation in combination with CV is that the split might land on interpolated features, these are auto-correlated, meaning that the model was actually trained on data which is in the test set. To fix this splits are always performed on real samples, omitting any data which goes across the train test boundary. To further complicate the matter, I would only like to test on real observations, this means that I have to retroactively find the real observations when computing the test score. This is done with a flag, and a column containing the real value and not the aggregate.
+The data-splitting was done using Cross-Validation (CV). When using CV the number of folds chosen were 5. The main reason for this is that this is what `TimeSeriesSplit` defaults to. Other splits were tested, such as `ShuffleSplit` and `GroupShuffleSplit`, however, model performance got suspiciously good, suggesting data leakage. Using a time series split is also representational of the real world usage on the model, i.e. we use previous data points to predict future data. One issue with doing interpolation in combination with CV is that the split might land on interpolated features, these are auto-correlated, meaning that the model was actually trained on data which is in the test set. To fix this splits are always performed on real samples, omitting any data which goes across the train test boundary. To further complicate the matter, I would only like to test on real observations, this means that I have to retroactively find the real observations when computing the test score. This is done with a flag, and a column containing the real value and not the aggregate.
 
 == Missing values <sec:missing>
 The dataset does not have any null values, any introduced are by doing joins and re-sampling, which have been described in @sec:alignment.
@@ -95,7 +94,7 @@ Two methods of direction encoding have been employed and tested. The first metho
 
 //The need to handle direction encoding, differs by the model which is chosen. For a linear regression model, which does not have built in support for categorical data, we can encode the direction into sinus and cosinus. The main problem here being that linear models does not handle non-linear data well. I chose to go with boosted trees for my main model, specifically the `sklearn.ensemble.HistGradientBoostRegressor`. This has native support for categorical data. However the categories does not really represent the circular dependency of the data, i.e. which directions are close to each other. I therefore complimented it with the direction encoding, however, for boosted trees, it did not seem to make much of a difference.
 == Feature scaling <sec:scaling>
-With some models it can make sense to scale features as larger features might skew the loss function, causing other features to be undermined. To do this a `StandardScaler` was applied. A `MinMaxScaler` was also tried. The main difference between the two is that the `StandardScaler` and the `MinMaxScaler` is that the standard scaler removes the mean such that the dataset has unit variance @standardscaler (i.e the z-score is calculated) $z=(x-mu)/sigma$. The `MinMaxScaler` scales each feature such that it is in the range between 0 and 1 @minmaxscaler.
+With some models it can make sense to scale features as larger features might skew the loss function, causing other features to be undermined. To do this a `StandardScaler` was applied. A `MinMaxScaler` was also tried. The main difference between the two is that the `StandardScaler` and the `MinMaxScaler` is that the standard scaler removes the mean such that the dataset has unit variance @standardscaler (i.e. the z-score is calculated) $z=(x-mu)/sigma$. The `MinMaxScaler` scales each feature such that it is in the range between 0 and 1 @minmaxscaler.
 //With a linear regression pipeline, it can make a lot of sense to to scale features, as is changes the properties of how the curve is fitted. However since I ended up using boosted trees, this benefit is no longer there. The reason is that boosted trees makes a series of "splits", meaning that monotonic transformations (such as scaling) have no real impact.
 
 
@@ -105,12 +104,13 @@ With some models it can make sense to scale features as larger features might sk
 // The >= 2 regression models chosen (RidgeCV, HistGradientBoostingRegressor) and why.
 
 Four models were evaluated against each other during the exhaustive runs.
-- A linear regressions model, `LinearRegression`
+- A linear regression model, `LinearRegression`
 - A tree based model, `HistGradientBoostingRegressor`
 - A support vector machine based model, `SVR`
 - A multi layer perceptron model, `MLPRegressor`
 
-The choice of these models are a bit arbitrary but they try the main types of models on the data. An important note is that training `SVR` on large datasets is painfully slow, meaning that it is impractical to use when upsampling data to minute granularity. Thus for this specific instance the `LinearSVR` was chosen.
+The choice of these models is a bit arbitrary, but they try the main types of models on the data. Had we upsampled the data to minute granularity, then `SVR` would be painfully slow, thus, in this instance, `LinearSVR` should be used.
+//An important note is that training `SVR` on large datasets is painfully slow, meaning that it is impractical to use if upsampling data to minute granularity. Thus when for this specific instance the `LinearSVR` was chosen.
 
 == Evaluation metrics <sec:metrics>
 The main metrics used to evaluate these models is the mean $R^2$ score of 5 CV folds. Other supporting metrics are mean _RMSE_ and mean _MAE_. As well as best and worst of each respectively. $R^2$ explains the proportion of variance which is explained by the model. An $R^2$ score of 0 is no better than just using the mean, 1 is a perfect fit, and a negative value means the model is worse than just using the mean. The main benefit of using $R^2$ is that maximizing $R^2$ equates to minimizing the sum of squared residuals. The metric itself is, however, does not preserve any information about the unit.
@@ -133,7 +133,17 @@ As explained in @sec:metrics, the main metric used is mean $R^2$. To find the mo
 
 == Results <sec:results>
 The best model in my case was the `SVR` model utilizing the `OneHotEncoder` for direction encoding. This model managed a mean $R^2$ score of $0.66$. The best fold for this model was fold 4#footnote([Fold 4 is the last fold due to zero indexing]) managing an $R^2$ score of $~0.82$.
-An interesting observation is that the different models seems to perform worse on the same fold, specifically fold 2 seems to contain some data which lowers the floor considerably. If this run is removed then the mean $R^2$ jumps to $0.72$ for the best model, which remains the same, that is 6 _pp_!
+An interesting observation is that the different models seems to perform worse on the same fold, specifically fold 2 seems to contain some data which lowers the floor considerably. If this run is removed then the mean $R^2$ jumps to $0.72$ for the best model, which remains the same, that is 6 _pp_! This is probably explained by the fact that there is a lot of missing observations in the power dataset.
+#figure(
+  image("./figures/wind-data-points.png"),
+  caption: [Upsampled wind data points],
+)
+As can be seen in the resampled wind dataset, there are 24 observations pr. day.
+#figure(
+  image("./figures/power-data-points.png"),
+  caption: [Downsampled power data point],
+)
+However for the power data it can be seen that for some days there are missing data points, i.e. days with less than 24 hours. Coincidentally the third fold (fold 2) ends at 2022-01-28 05:00:00, which is just two weeks after the data gap, meaning there is quite a large data gap in the range of this fold.
 
 = Model serving <sec:serving>
 // Registering the selected model in the MLflow Model format.
@@ -151,7 +161,7 @@ The curl and the model response can be seen in #link(<appendix:curl>)[Appendix E
 
 == Training data window size <sec:window>
 // Discussion of the training window (e.g. 90 days) and its effect.
-The window size is only 90 days, with the current upsampling this produces roughly 2160 rows. With a 5 fold split, this means that each fold adds only a small amount of data. This could cause the model to not have enough training data to properly generalize. This claim could be supported by the fact that from fold 2 the model performance increases with more data. However I would say that this claim is on shaky ground at best. Another point is that there could be seasonal patterns which would not be shown in the data, since it only contains a subset of the year. As-is when utilizing time within the training data, it seems to hurt the model more than it helps. If there was two years of training data there could be a hidden signal in the time and day of the year, but there is no way to be sure.
+The window size is only 90 days, the current resampling yields roughly 2160 rows ($90 times 24$). With a 5 fold split, this means that each fold adds only a small amount of data. This could cause the model to not have enough training data to properly generalize. This claim could be supported by the fact that from fold 2 the model performance increases with more data. However, I would say that this claim is on shaky ground at best. Another point is that there could be seasonal patterns which would not be shown in the data, since it only contains a subset of the year. As-is when utilizing time within the training data, it seems to hurt the model more than it helps. If there was two years of training data there could be a hidden signal in the time and day of the year, but there is no way to be sure.
 
 #figure(
   image("./figures/feature-correlation.png", width: 70%),
@@ -164,12 +174,12 @@ The correlation matrix shows that there is a small negative correlation between 
 // Limitations of the approach and concrete potential improvements.
 As already mentioned in the section above, there might be training data limitations, due to the small size of the data. Other limitations regarding the dataset could be that the distribution of wind speed is not uniform, meaning that we have way more observations within a specific range. This might bias the model, causing it to be more uncertain for wind speeds outside that range. Within the scope of dataset imbalance, there is also the imbalance referenced in @sec:alignment @fig:dir-dist. The wind directions are not evenly distributed which could be another limiting factor in regards to model performance.
 
-The way in which the optimal tranformer/regressor combination was found was through exhaustive combinations of these, see @sec:methods. This is valid way to do model comparisons, but the main limiting factors is that the current approach does not test different hyperparameter configurations. In addition testing different models through exhaustive iterations is not the fastest approach to find a good model pipeline, for this, something like `GridSearchCV` could have been used. `GridSearchCV` also has support for hyperparameter tuning given a discrete set of values. However a dedicated hyperparameter tuning framework like `optuna` @akiba2019optuna @optuna-docs, would be preferred.
+The way in which the optimal transformer/regressor combination was found was through exhaustive combinations of these, see @sec:methods. This is valid way to do model comparisons, but the main limiting factors is that the current approach does not test different hyperparameter configurations. In addition, testing different models through exhaustive iterations is not the fastest approach to find a good model pipeline; for this, something like `GridSearchCV` could have been used. `GridSearchCV` also has support for hyperparameter tuning given a discrete set of values. However, a dedicated hyperparameter tuning framework like `optuna` @akiba2019optuna @optuna-docs, would be preferred.
 
 //= Conclusion <sec:conclusion>
 
 = Use of generative AI <sec:ai>
-Anthropic's Claude @claude was used during this project as a coding assistant and a sounding board. Specifically it helped refactor certain parts of the code and was used as a debugging tool. Other parts of the code are completely generated, this is the code for the plots seen in this report. Claude also participated in the writing of this report for scaffolding section headers from the README, as a reviewer and for generating bibliography references into the bibtex format. However none of the section contents were written by AI.
+Anthropic's Claude @claude was used during this project as a coding assistant and a sounding board. Specifically it helped refactor certain parts of the code and was used as a debugging tool. Other parts of the code are completely generated; this is the code for the plots seen in this report. Claude also participated in the writing of this report for scaffolding section headers from the README, as a reviewer, and for generating bibliography references into the bibtex format. However, none of the section contents were written by AI.
 //Anthropic's Claude @claude was used during this project as a coding assistant and a sounding board. Concretely it helped scaffold, refactor and debug parts of the pipeline code#footnote([Specifically used for `matplotlib` plotting, refactoring some of the Experiment builder code and miscellaneous debugging]). All generated code and text were reviewed, tested, and edited by the author, who takes full responsibility for the final submission. Model selection, feature-engineering decisions, and interpretation of the results are the author's own.
 == Example of code refactor
 One of the code refactors done by Claude, is that the experiment builder was first responsible for building the pipeline. Later I, after building the `ColumnTransformerBuilder`, realized that the current architecture was not sound. Thus it refactored the existing building logic into the `PipelineBuilder`.
@@ -298,3 +308,7 @@ W"], [8.05, "SW"], [9.83, "SW"], [9.83, "SSW"], [11.18, "S"], [12.07, "S"], [12.
   ]
 }
 ```
+= Appendix F
+The full source code for this project is available at
+
+#link("https://github.com/AlbertRossJoh/BDM_Assignment_MLflow")
