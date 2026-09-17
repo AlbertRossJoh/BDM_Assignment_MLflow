@@ -59,7 +59,7 @@ The wind speed seems minimally affected by the up-sampling, only causing some sm
 #figure(
   image("./figures/direction-distribution.png", width: 70%),
   caption: [Direction class counts before and after re-sampling to a 1-hour interval (forward fill)],
-)
+) <fig:dir-dist>
 
 Directions are forward filled, thus there is almost no difference between the raw dataset and the upsampled one. The main reason for the small difference is that there exists two gaps which are larger than 3 hours.
 #figure(
@@ -153,19 +153,30 @@ The curl and the model response can be seen in #link(<appendix:curl>)[Appendix E
 // Discussion of the training window (e.g. 90 days) and its effect.
 The window size is only 90 days, with the current upsampling this produces roughly 2160 rows. With a 5 fold split, this means that each fold adds only a small amount of data. This could cause the model to not have enough training data to properly generalize. This claim could be supported by the fact that from fold 2 the model performance increases with more data. However I would say that this claim is on shaky ground at best. Another point is that there could be seasonal patterns which would not be shown in the data, since it only contains a subset of the year. As-is when utilizing time within the training data, it seems to hurt the model more than it helps. If there was two years of training data there could be a hidden signal in the time and day of the year, but there is no way to be sure.
 
+#figure(
+  image("./figures/feature-correlation.png", width: 70%),
+  caption: [Correlation matrix],
+)
+
+The correlation matrix shows that there is a small negative correlation between the ordinal day (doy) and the total power output, and the same correlation for speed. This could mean that the ordinal day is just a proxy for speed.
+
 == Limitations and improvements <sec:limitations>
 // Limitations of the approach and concrete potential improvements.
+As already mentioned in the section above, there might be training data limitations, due to the small size of the data. Other limitations regarding the dataset could be that the distribution of wind speed is not uniform, meaning that we have way more observations within a specific range. This might bias the model, causing it to be more uncertain for wind speeds outside that range. Within the scope of dataset imbalance, there is also the imbalance referenced in @sec:alignment @fig:dir-dist. The wind directions are not evenly distributed which could be another limiting factor in regards to model performance.
 
+The way in which the optimal tranformer/regressor combination was found was through exhaustive combinations of these, see @sec:methods. This is valid way to do model comparisons, but the main limiting factors is that the current approach does not test different hyperparameter configurations. In addition testing different models through exhaustive iterations is not the fastest approach to find a good model pipeline, for this, something like `GridSearchCV` could have been used. `GridSearchCV` also has support for hyperparameter tuning given a discrete set of values. However a dedicated hyperparameter tuning framework like `optuna` @akiba2019optuna @optuna-docs, would be preferred.
 
 //= Conclusion <sec:conclusion>
 
 = Use of generative AI <sec:ai>
-Anthropic's Claude @claude was used during this project as a coding assistant and a sounding board. Concretely it helped scaffold, refactor and debug parts of the pipeline code#footnote([Specifically used for `matplotlib` plotting, refactoring some of the Experiment builder code and miscellaneous debugging]). All generated code and text were reviewed, tested, and edited by the author, who takes full responsibility for the final submission. Model selection, feature-engineering decisions, and interpretation of the results are the author's own.
+Anthropic's Claude @claude was used during this project as a coding assistant and a sounding board. Specifically it helped refactor certain parts of the code and was used as a debugging tool. Other parts of the code are completely generated, this is the code for the plots seen in this report. Claude also participated in the writing of this report for scaffolding section headers from the README, as a reviewer and for generating bibliography references into the bibtex format. However none of the section contents were written by AI.
+//Anthropic's Claude @claude was used during this project as a coding assistant and a sounding board. Concretely it helped scaffold, refactor and debug parts of the pipeline code#footnote([Specifically used for `matplotlib` plotting, refactoring some of the Experiment builder code and miscellaneous debugging]). All generated code and text were reviewed, tested, and edited by the author, who takes full responsibility for the final submission. Model selection, feature-engineering decisions, and interpretation of the results are the author's own.
 == Example of code refactor
 One of the code refactors done by Claude, is that the experiment builder was first responsible for building the pipeline. Later I, after building the `ColumnTransformerBuilder`, realized that the current architecture was not sound. Thus it refactored the existing building logic into the `PipelineBuilder`.
 == Example of code generation
 The plotting logic with in was completely built by Claude
 
+#pagebreak()
 #show heading.where(level: 1): set heading(numbering: none)
 = Appendix A <appendix:exhaustive>
 Given the following experiment:
