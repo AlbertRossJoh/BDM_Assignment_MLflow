@@ -47,7 +47,7 @@ I mainly tried 3 different approaches to data-re-sampling: (1) Downsample the po
   image("./figures/power-distribution.png", width: 70%),
   caption: [Total power output distribution (Gaussian KDE) before and after down-sampling to a 1-hour interval (Mean over 1-hour frame)],
 )
-As can be seen, this down-sampling causes an increase in the 30 MW range and in the 15 MW range. The probable reason for this is that averaging 60 samples per hour centers the distribution.
+As can be seen, this down-sampling causes an increase in the 30 MW range and in the 15 MW range. The probable reason for this is that averaging 60 samples per hour centers the distribution. This change results in a small reduction in standard deviation, specifically from $sigma^2 approx 11.148$ to $sigma^2 approx 11.019$.
 //This is most likely caused by large values affecting the mean #footnote([This can be corrected for using the median, however this minimally worsens the $R^2$ score of the models.]).
 
 #figure(
@@ -55,7 +55,7 @@ As can be seen, this down-sampling causes an increase in the 30 MW range and in 
   caption: [Wind speed distribution (Gaussian KDE) before and after re-sampling to a 1-hour interval (Linear interpolation)],
 )
 
-The wind speed seems minimally affected by the up-sampling, only causing some smoothing in the distribution; this makes sense as the interpolation is linear.
+The wind speed seems minimally affected by the up-sampling, only causing some smoothing in the distribution; this makes sense as the interpolation is linear. This means that we gain resolution without sacrificing much of the datasets variance, specifically standard deviation drops by a small margin from $sigma^2 approx 4.745$ to $sigma^2 approx 4.623$.
 #figure(
   image("./figures/direction-distribution.png", width: 70%),
   caption: [Direction class shares before and after re-sampling to a 1-hour interval (forward fill)],
