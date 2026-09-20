@@ -114,23 +114,32 @@ The choice of these models is a bit arbitrary, but they try the main types of mo
 == Evaluation metrics <sec:metrics>
 The main metric used to evaluate these models is the mean $R^2$ score of 5 CV folds. Other supporting metrics are mean _RMSE_ and mean _MAE_. As well as best and worst of each respectively. $R^2$ explains the proportion of variance which is explained by the model. An $R^2$ score of 0 is no better than just using the mean, 1 is a perfect fit, and a negative value means the model is worse than just using the mean. The main benefit of using $R^2$ is that maximizing $R^2$ equates to minimizing the sum of squared residuals. The metric does not, however, preserve any information about the unit.
 
-== Future predictions <sec:future>
-// Using future.csv to generate forecasts and confirm the model runs on unseen data.
-#figure(
-  image("./figures/total-forecast.png"),
-  caption: [Forecast for future total power output (MW) based on weather forecast data],
-)
-// Might need to put this in a later section
-
 = Experiment tracking with MLflow <sec:tracking>
-== Model comparison and selection <sec:selection>
+//== Model comparison and selection <sec:selection>
 // Comparing model variants in the MLflow UI and selecting the best model.
 MLflow was used to compare the models. The main way this was set up is that if the same data went in to the model, and the model evaluation is the same, then it is the same experiment. Each run is then a variation of the different pipelines. To view how this was done in practice see #link(<appendix:mlflow>, [Appendix B]).
 As explained in @sec:metrics, the main metric used is mean $R^2$. To find the model with the best mean $R^2$ we just sort by descending for that column in the run table. We can also choose to view the data as a histogram, however, because of the exhaustive runs, this was impractical.
 
-== Results <sec:results>
+= Results <sec:results>
 The best model in my case was the `SVR` model utilizing the `OneHotEncoder` for direction encoding. Notably, the circular sin/cos encoding described in @sec:direction did not win, despite preserving more structure. A plausible explanation is that `SVR` already handles the one-hot columns well, so an explicitly circular representation buys little on this dataset. This model managed a mean $R^2$ score of $0.66$. The best fold for this model was fold 4#footnote([Fold 4 is the last fold due to zero indexing]) managing an $R^2$ score of $~0.82$.
-An interesting observation is that the different models seem to perform worse on the same fold, specifically fold 2 seems to contain some data which lowers the floor considerably. If fold 2 is excluded, the mean $R^2$ of the best model rises from $0.66$ to $0.72$, a gain of 6 _pp_; the identity of the best model is unchanged. This is probably explained by the fact that there are a lot of missing observations in the power dataset.
+An interesting observation is that the different models seem to perform worse on the same fold, specifically fold 2 seems to contain some data which lowers the floor considerably.
+#figure(
+  table(
+    columns: 6,
+    stroke: none,
+    table.header(
+      table.hline(),
+      [], [Fold 0], [Fold 1], [Fold 2], [Fold 3], [Fold 4],
+      table.hline(),
+    ),
+    [Mean], [-8.59e24], [0.1162], [-0.2910], [0.5557], [0.7273],
+    [Median], [0.5699], [0.6227], [0.3198], [0.5988], [0.7806],
+    [Min], [-6.04e26], [-32.0519], [-68.9709], [-0.3876], [-0.4006],
+    [Max], [0.7352], [0.7797], [0.5922], [0.6682], [0.8425],
+  ),
+  caption: [Per-fold $R^2$ statistics across all 210 runs in experiment 37.],
+)
+If fold 2 is excluded, the mean $R^2$ of the best model rises from $0.66$ to $0.72$, a gain of 6 _pp_. This is probably explained by the fact that there are a lot of missing observations in the power dataset.
 #figure(
   image("./figures/wind-data-points.png"),
   caption: [Upsampled wind data points],
@@ -140,7 +149,17 @@ As can be seen in the resampled wind dataset, there are 24 observations per day.
   image("./figures/power-data-points.png"),
   caption: [Downsampled power data point],
 )
-However, for the power data it can be seen that for some days there are missing data points, i.e. days with fewer than 24 hourly observations. Coincidentally, the third fold (fold 2) ends at 2022-01-28 05:00:00, which is just two weeks after the data gap, meaning there is quite a large data gap in the range of this fold.
+However, for the power data it can be seen that for some days there are missing data points, i.e. days with fewer than 24 hourly observations. Coincidentally, the third fold (fold 2) ends at 2022-01-28 05:00:00, which is just two weeks after the data gap, meaning there is quite a large data gap in the range of this fold. This could be the explanation to the unusually terrible performance.
+
+== Future predictions <sec:future>
+The best model was tested against `future.csv`, the model was trained using a regular unshuffled train test split. The output was appended (#text([red line], fill: red)) to the existing dataset(#text([blue line], fill: blue)) and plotted, see @future:forecast.
+// Using future.csv to generate forecasts and confirm the model runs on unseen data.
+#figure(
+  image("./figures/total-forecast.png"),
+  caption: [Forecast for future total power output (MW) based on weather forecast data],
+) <future:forecast>
+
+
 
 = Model serving <sec:serving>
 // Registering the selected model in the MLflow Model format.
