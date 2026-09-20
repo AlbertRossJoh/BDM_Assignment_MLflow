@@ -17,7 +17,11 @@ from sklearn.metrics import (
     r2_score,
     root_mean_squared_error,
 )
-from sklearn.model_selection import TimeSeriesSplit, train_test_split
+from sklearn.model_selection import (
+    BaseCrossValidator,
+    TimeSeriesSplit,
+    train_test_split,
+)
 from sklearn.pipeline import Pipeline
 
 Step = tuple[str, TransformerMixin]
@@ -379,11 +383,12 @@ class ExperimentBuilder:
         df: pl.DataFrame,
         tracking_uri: str,
         log_model: bool,
+        split: Callable[[pl.DataFrame], Iterable[tuple[Any, Any]]] | None = None,
     ) -> None:
         mlflow.set_tracking_uri(tracking_uri)
         if log_model:
             mlflow.sklearn.autolog()
-        builder.run_experiment(df, log_model=log_model)
+        builder.run_experiment(df, log_model=log_model, split=split)
 
     def exhaustive(
         self,
@@ -394,6 +399,7 @@ class ExperimentBuilder:
         keep_on_present: dict[str, str | Iterable[str]] = {},
         n_jobs: int = -1,
         log_model: bool = False,
+        split: Callable[[pl.DataFrame], Iterable[tuple[Any, Any]]] | None = None,
     ) -> None:
         """
         Exhaustive experiment runs with different transformer combinations
@@ -489,7 +495,9 @@ class ExperimentBuilder:
                 run_name=run_name,
             ).select(*current_select)
 
-            self._run_worker(builder, df, mlflow.get_tracking_uri(), log_model)
+            self._run_worker(
+                builder, df, mlflow.get_tracking_uri(), log_model, split=split
+            )
 
         # _ = list(
         #    tqdm(
@@ -511,6 +519,7 @@ class ExperimentBuilder:
         regressor: RegressorMixin | None = None,
         validation: Literal["cv", "train_test"] = "cv",
         log_model: bool = True,
+        split: Callable[[pl.DataFrame], Iterable[tuple[Any, Any]]] | None = None,
     ) -> None:
         if self.did_run:
             return
@@ -518,9 +527,17 @@ class ExperimentBuilder:
             mlflow.set_experiment(self._experiment_name)
         if regressor is None:
             for regressor in self.regressors:
-                self._run_one(df, regressor, validation=validation, log_model=log_model)
+                self._run_one(
+                    df,
+                    regressor,
+                    validation=validation,
+                    log_model=log_model,
+                    split=split,
+                )
         else:
-            self._run_one(df, regressor, validation=validation, log_model=log_model)
+            self._run_one(
+                df, regressor, validation=validation, log_model=log_model, split=split
+            )
         self.did_run = True
 
     def _already_logged(self, run_name: str) -> str | None:
@@ -549,6 +566,7 @@ class ExperimentBuilder:
         regressor: RegressorMixin,
         validation: Literal["cv", "train_test"] = "cv",
         log_model: bool = True,
+        split: Callable[[pl.DataFrame], Iterable[tuple[Any, Any]]] | None = None,
     ) -> None:
         run_name = self._run_name_for(regressor)
         if run_url := self._already_logged(self._run_name_for(regressor)):
@@ -556,7 +574,7 @@ class ExperimentBuilder:
             return
         with mlflow.start_run(run_name=run_name):
             if validation == "cv":
-                metrics = self._cv_scores(df, regressor, log_folds=True)
+                metrics = self._cv_scores(df, regressor, log_folds=True, split=split)
             else:
                 metrics = self._train_test_scores(df, regressor)
             mlflow.log_metrics(metrics)
@@ -629,12 +647,19 @@ class ExperimentBuilder:
         df: pl.DataFrame,
         regressor: RegressorMixin,
         *,
+        split: Callable[[pl.DataFrame], Iterable[tuple[Any, Any]]] | None = None,
         log_folds: bool = False,
     ) -> dict[str, float]:
         cv = TimeSeriesSplit(n_splits=5)
+
+        def time_split(x: pl.DataFrame) -> Iterable[tuple[np.ndarray, np.ndarray]]:
+            return cv.split(x)
+
+        if split is None:
+            split = time_split
         pipeline = self.pipeline_for(regressor)
         acc: dict[str, list[float]] = {name: [] for name in _METRICS}
-        for i, (train_index, test_index) in enumerate(cv.split(df)):
+        for i, (train_index, test_index) in enumerate(split(df)):
             fold = clone(pipeline)
             df_train = df[train_index]
             df_test = df[test_index].filter(pl.col("real_obs_weather"))

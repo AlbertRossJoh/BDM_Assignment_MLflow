@@ -1,7 +1,7 @@
 import mlflow
 import click
 import polars as pl
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.preprocessing import OneHotEncoder
 from sklearn.svm import SVR
 
 
@@ -69,7 +69,9 @@ def main(power_csv: str, weather_csv: str) -> None:
                 select="Direction",
             )
         )
-        .run_experiment(joined_df, regressor=SVR(), validation="train_test")
+        .run_experiment(
+            joined_df, regressor=SVR(), validation="train_test", log_model=True
+        )
     )
 
 
