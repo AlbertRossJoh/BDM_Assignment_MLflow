@@ -42,12 +42,13 @@ Both feature transformations/engineering and the model itself are placed in a si
 //Data was loaded in using using the `read_csv` function from `polars` which is a popular dataframe library.
 One of the main issues with the two datasets is the different cardinality and resolution. This is because the power dataset is sampled every minute, while the wind dataset is sampled every three hours. There are multiple ways of addressing this; either downsample the power dataset to match the 3 hour interval, upsample the wind dataset to match the minute interval, or do something in-between. The main benefit of downsampling is that the data is matched to the least common denominator, i.e. no data is created and no assumptions are made about its shape. This, however, comes at the cost of the amount of training data as well as the granularity of the predictions. Upsampling is the opposite of this: assumptions about the data's shape have to be made, however, more data is gained and predictions can be made with higher granularity #footnote([Granularity here being the precision of the prediction, if the model has been trained on hourly data, it will be hard to predict what will happen the next second.]).
 
-The approach that best balances dataset distributions is to re-sample to 1-hour intervals. Upsampling is done by interpolating between actual data points, assuming wind speed changes smoothly, while direction is interpolated via forward filling. Downsampling is done by grouping the power dataset by hour and taking the mean of total power output.
+I mainly tried 3 different approaches to data-re-sampling: (1) Downsample the power dataset to 3h intervals, (2) Resample both to 1h intervals, and (3) Upsampling the wind-dataset to 1m intervals. The approach which resulted in the best models based on the $R^2$ scores, was the 1 hour re-sampling. The main theory behind this is that the re-sampling does not introduce any signals. Thus if upsampling the wind dataset to minute granularity, then the model is not getting any actual signal. When downsampling the power-dataset to 3 hours, then the actual power output just looks like noise. For this reason a good middle ground is doing both. There might be smooth changes between wind speed/direction which can be inferred on a 1 hour level, and power patterns might be well represented as an aggregate over this frame as-well. Thus the approach that best balances dataset distributions is to re-sample to 1-hour intervals. Upsampling is done by interpolating between actual data points, assuming wind speed changes smoothly, while direction is interpolated via forward filling. Downsampling is done by grouping the power dataset by hour and taking the mean of total power output.
 #figure(
   image("./figures/power-distribution.png", width: 70%),
   caption: [Total power output distribution (Gaussian KDE) before and after down-sampling to a 1-hour interval (Mean over 1-hour frame)],
 )
-As can be seen, this down-sampling causes an increase in the 30 MW range and in the 15 MW range. This is most likely caused by large values affecting the mean #footnote([This can be corrected for using the median, however this minimally worsens the $R^2$ score of the models.]).
+As can be seen, this down-sampling causes an increase in the 30 MW range and in the 15 MW range. The probable reason for this is that averaging 60 samples per hour centers the distribution.
+//This is most likely caused by large values affecting the mean #footnote([This can be corrected for using the median, however this minimally worsens the $R^2$ score of the models.]).
 
 #figure(
   image("./figures/wind-distribution.png", width: 70%),
@@ -57,7 +58,7 @@ As can be seen, this down-sampling causes an increase in the 30 MW range and in 
 The wind speed seems minimally affected by the up-sampling, only causing some smoothing in the distribution; this makes sense as the interpolation is linear.
 #figure(
   image("./figures/direction-distribution.png", width: 70%),
-  caption: [Direction class counts before and after re-sampling to a 1-hour interval (forward fill)],
+  caption: [Direction class shares before and after re-sampling to a 1-hour interval (forward fill)],
 ) <fig:dir-dist>
 
 Directions are forward filled, thus there is almost no difference between the raw dataset and the upsampled one. The main reason for the small difference is that there exist two gaps which are larger than 3 hours.
@@ -87,10 +88,10 @@ Due to the main methodology of doing exhaustive pipeline runs, multiple approach
 The data-splitting was done using Cross-Validation (CV). When using CV the number of folds chosen was 5. The main reason for this is that this is what `TimeSeriesSplit` defaults to. Other splits were tested, such as `ShuffleSplit` and `GroupShuffleSplit`, however, model performance got suspiciously good, suggesting data leakage. Using a time series split is also representative of the real world usage of the model, i.e. previous data points are used to predict future data. One issue with doing interpolation in combination with CV is that the split might land on interpolated features; since these are auto-correlated, it means that the model was actually trained on data which is in the test set. To fix this, splits are always performed on real samples, omitting any data which goes across the train test boundary. To further complicate the matter, I only want to test on real observations, which means that the real observations have to be found retroactively when computing the test score. This is done with a flag, and a column containing the real value and not the aggregate.
 
 == Missing values <sec:missing>
-The raw datasets contain no null values. Nulls are only introduced in the join and resampling step described in @sec:alignment; these are resolved at resampling time, such that they're not propagated. The null handling is done in the `Speed` column by linear interpolation, and `Direction` is handled by forward filling. Thus no imputation step is needed to fill nulls for input data values. There exists a rolling mean step in the pipeline, which handles missing values at the start and at the end of the dataframe by using the mean.
+The raw datasets contain no null values. Nulls are only introduced in the join and resampling step described in @sec:alignment; these are resolved at resampling time, such that they're not propagated. The null handling is done in the `Speed` column by linear interpolation, and `Direction` is handled by forward filling. Thus no imputation step is needed to fill nulls for input data values. There exists a rolling mean step in the pipeline, which introduces nulls in the first 11 rows of the dataframe, since the window has not yet been filled; these are imputed with the column mean.
 
 == Wind direction encoding <sec:direction>
-Two methods of direction encoding have been employed and tested. The first method is using a `OneHotEncoder`, which encodes categorical data by pivoting the categories to binary columns. The other method is encoding the directions to degrees and extracting sin and cos from those degrees. Since the compass is split into 16 classes, there are $360/16=22.5 degree$ between neighbouring classes. That is, if the classes are mapped to integers $i in {0, 1, ..., 15}$, then the wind direction is computed as $theta_i = i dot 22.5 degree$, and the encoder emits the pair $(sin theta_i, cos theta_i)$. This also preserves the circular dependency which is discarded by the `OneHotEncoder`.
+Two methods of direction encoding have been employed and tested. The first method is using a `OneHotEncoder`, which encodes categorical data by pivoting the categories to binary columns. The other method is encoding the directions to degrees and extracting sin and cos from those degrees. Since the compass is split into 16 classes, there are $360/16=22.5 degree$ between neighbouring classes. That is, if the classes are mapped to integers $i in {1, 2, ..., 16}$ in compass order starting at north, then the wind direction is computed as $theta_i = i dot 22.5 degree$, and the encoder emits the pair $(sin theta_i, cos theta_i)$. This also preserves the circular dependency which is discarded by the `OneHotEncoder`.
 
 //The need to handle direction encoding, differs by the model which is chosen. For a linear regression model, which does not have built in support for categorical data, we can encode the direction into sinus and cosinus. The main problem here being that linear models does not handle non-linear data well. I chose to go with boosted trees for my main model, specifically the `sklearn.ensemble.HistGradientBoostRegressor`. This has native support for categorical data. However the categories does not really represent the circular dependency of the data, i.e. which directions are close to each other. I therefore complimented it with the direction encoding, however, for boosted trees, it did not seem to make much of a difference.
 == Feature scaling <sec:scaling>
@@ -122,8 +123,8 @@ As explained in @sec:metrics, the main metric used is mean $R^2$. To find the mo
 The project has autolog enabled, and utilizes manual metric/model/dataset/artifact logging. This is all done in the experiment builder. Some logging can be disabled to improve execution speed. The metrics logged are the ones presented in @sec:metrics.
 
 = Results <sec:results>
-The best performing model was the `SVR` model utilizing the `OneHotEncoder` for direction encoding. Notably, the circular sin/cos encoding described in @sec:direction did not win, despite preserving more structure. A plausible explanation is that `SVR` already handles the one-hot columns well, so an explicitly circular representation buys little on this dataset. Furthermore, scaling seems to have a negative impact on the model, even though a support vector kernel usually benefits from feature scaling. There could be many reasons for this, but it is out of scope for this report. This model managed a mean $R^2$ score of $0.66$. The best fold for this model was fold 4#footnote([Fold 4 is the last fold due to zero indexing]) managing an $R^2$ score of $~0.82$.
-An interesting observation is that the different models seem to perform worse on the same fold, specifically fold 2 seems to contain some data which lowers the floor considerably.
+The best performing model was the `SVR` model utilizing the `OneHotEncoder` for direction encoding. Notably, the circular sin/cos encoding described in @sec:direction did not win, despite preserving more structure. A plausible explanation is that `SVR` already handles the one-hot columns well, so an explicitly circular representation buys little on this dataset. Furthermore, scaling seems to have a negative impact on the model, even though a support vector kernel usually benefits from feature scaling. There could be many reasons for this, but it is out of scope for this report. This model managed a mean $R^2$ score of $0.70$. The best fold for this model was fold 4#footnote([Fold 4 is the last fold due to zero indexing]) managing an $R^2$ score of $~0.83$, while the worst was fold 2 at $~0.55$.
+An interesting observation is that the different models seem to perform worse on the same fold, specifically fold 2 seems to contain some data which lowers the ceiling considerably: no pipeline out of the 144 scores above $0.63$ on it, the lowest maximum of any fold.
 #figure(
   table(
     columns: 6,
@@ -133,14 +134,14 @@ An interesting observation is that the different models seem to perform worse on
       [], [Fold 0], [Fold 1], [Fold 2], [Fold 3], [Fold 4],
       table.hline(),
     ),
-    [Mean], [-8.59e24], [0.1162], [-0.2910], [0.5557], [0.7273],
-    [Median], [0.5699], [0.6227], [0.3198], [0.5988], [0.7806],
-    [Min], [-6.04e26], [-32.0519], [-68.9709], [-0.3876], [-0.4006],
-    [Max], [0.7352], [0.7797], [0.5922], [0.6682], [0.8425],
+    [Mean], [-3.76e22], [0.6229], [0.3518], [0.6040], [0.7963],
+    [Median], [0.6134], [0.6635], [0.5135], [0.6185], [0.8081],
+    [Min], [-3.09e24], [0.2864], [-0.3220], [0.4418], [0.6631],
+    [Max], [0.7411], [0.7802], [0.6283], [0.6532], [0.8491],
   ),
-  caption: [Per-fold $R^2$ statistics across all 210 runs.],
+  caption: [Per-fold $R^2$ statistics across all 144 runs.],
 )
-If fold 2 is excluded, the mean $R^2$ of the best model rises from $0.66$ to $0.72$, a gain of 6 _pp_. This is probably explained by the fact that there are a lot of missing observations in the power dataset.
+If fold 2 is excluded, the mean $R^2$ of the best model rises from $0.70$ to $0.74$, a gain of 3.8 _pp_. This is probably explained by the fact that there are a lot of missing observations in the power dataset.
 #figure(
   image("./figures/wind-data-points.png"),
   caption: [Upsampled wind data points],
@@ -178,7 +179,7 @@ The curl and the model response can be seen in #link(<appendix:curl>)[Appendix E
 
 == Training data window size <sec:window>
 // Discussion of the training window (e.g. 90 days) and its effect.
-The window size is only 90 days; the current resampling yields roughly 2160 rows ($90 times 24$). With a 5 fold split, this means that each fold adds only a small amount of data. This could cause the model to not have enough training data to properly generalize. This claim could be supported by the fact that from fold 2 the model performance increases with more data. However, I consider this claim to be on shaky ground at best. Another point is that there could be seasonal patterns which would not be shown in the data, since it only contains a subset of the year. As it stands, including time-derived features in the training data seems to hurt the model more than it helps. If there were two years of training data there could be a hidden signal in the time and day of the year, but there is no way to be sure.
+The window size is only 90 days; the hourly grid is therefore 2158 rows ($~90 times 24$), and after the inner join with the power dataset 2008 rows remain, of which only 659 are real wind observations. With a 5 fold split, this means that each fold adds only a small amount of data. This could cause the model to not have enough training data to properly generalize. This claim could be supported by the fact that from fold 2 the model performance increases with more data. However, I consider this claim to be on shaky ground at best. Another point is that there could be seasonal patterns which would not be shown in the data, since it only contains a subset of the year. As it stands, including time-derived features in the training data seems to hurt the model more than it helps. If there were two years of training data there could be a hidden signal in the time and day of the year, but there is no way to be sure.
 
 #figure(
   image("./figures/feature-correlation.png", width: 70%),
@@ -231,14 +232,22 @@ pipeline_4 = Pipeline([
   SVR()
 ])
 pipeline_5 = Pipeline([
-  StandardScaler(),
+  OneHotEncoder(),
   MLPRegressor()
 ])
 pipeline_6 = Pipeline([
-  StandardScaler(),
+  OneHotEncoder(),
   SVR()
 ])
 pipeline_7 = Pipeline([
+  StandardScaler(),
+  MLPRegressor()
+])
+pipeline_8 = Pipeline([
+  StandardScaler(),
+  SVR()
+])
+pipeline_9 = Pipeline([
   DirectionEncoder(),
   StandardScaler(),
   MLPRegressor()
