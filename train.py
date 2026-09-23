@@ -51,6 +51,7 @@ def main(power_csv: str, weather_csv: str) -> None:
         .upsample("time", every=every)
         .with_columns(
             pl.col("Speed").interpolate(),
+            pl.col("Direction").fill_null(strategy="forward"),
             pl.col("real_obs_weather").fill_null(False),
         )
     )

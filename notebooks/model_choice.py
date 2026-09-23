@@ -6,7 +6,11 @@ app = marimo.App(width="full")
 
 @app.cell
 def _():
-    import marimo as mo
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
     import marimo as mo
     import numpy as np
     import polars as pl
@@ -144,6 +148,12 @@ def _(pl):
 
 
 @app.cell
+def _(wind_df_raw):
+    wind_df_raw
+    return
+
+
+@app.cell
 def _(np, pl):
     def print_dataset_metrics(power_df: pl.DataFrame, wind_df: pl.DataFrame):
         power_metrics = power_df.select(
@@ -190,6 +200,18 @@ def _(power_df_raw, print_dataset_metrics, wind_df_raw):
     power_df_raw_metrics, wind_df_raw_metrics, power_df_raw_entropy = (
         print_dataset_metrics(power_df_raw, wind_df_raw)
     )
+    return power_df_raw_metrics, wind_df_raw_metrics
+
+
+@app.cell
+def _(power_df_raw_metrics):
+    power_df_raw_metrics
+    return
+
+
+@app.cell
+def _(wind_df_raw_metrics):
+    wind_df_raw_metrics
     return
 
 
@@ -211,7 +233,7 @@ def _(HistGradientBoostingRegressor, LinearRegression, MLPRegressor, SVR):
     return
 
 
-@app.cell
+@app.cell(disabled=True)
 def _(
     ColumnTransformerBuilder,
     ExperimentBuilder,
@@ -344,7 +366,7 @@ def _(
             MLPRegressor(),
         )
         .with_experiment_name(
-            "Exhaustive search test scaling",
+            "Exhaustive search 1h resampling",
         )
         .exhaustive(
             joined_df,
@@ -356,15 +378,16 @@ def _(
             keep_on_present={
                 "direction encoding": "Direction",
                 "sin cos encoding": "Direction",
-                #"time feature engineering": "time",
+                # "time feature engineering": "time",
             },
             split=tss,
+            log_model=True,
         )
     )
     return
 
 
-@app.cell
+@app.cell(disabled=True)
 def _(
     OneHotEncoder,
     PipelineBuilder,
@@ -397,7 +420,7 @@ def _(
     return (svr_pipeline,)
 
 
-@app.cell
+@app.cell(disabled=True)
 def _(pl, svr_pipeline):
     future_df = pl.read_csv("./data/future.csv", try_parse_dates=True)
     future_X = future_df.select(["Speed", "Direction"])
@@ -405,7 +428,7 @@ def _(pl, svr_pipeline):
     return future_df, y_fut
 
 
-@app.cell
+@app.cell(disabled=True)
 def _(future_df, pl, y_fut):
     import altair as alt
 
@@ -416,7 +439,7 @@ def _(future_df, pl, y_fut):
     return alt, data_future
 
 
-@app.cell
+@app.cell(disabled=True)
 def _(joined_df):
     joined_df.select(["time", "Speed", "Direction", "Total"])
     return
@@ -446,7 +469,7 @@ def _(alt, data_future, joined_df, pl):
     return
 
 
-@app.cell
+@app.cell(disabled=True)
 def _(
     FunctionTransformer,
     GridSearchCV,

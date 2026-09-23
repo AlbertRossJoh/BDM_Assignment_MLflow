@@ -52,7 +52,7 @@ def _(
         .sort("time")
         .group_by_dynamic("time", every=every)
         .agg(
-            pl.col("Total").median(),
+            pl.col("Total").mean(),
             pl.col("Total").first().alias("real_obs_power"),
         )
     )
@@ -328,7 +328,6 @@ def _(TimeSeriesSplit, pl, power_df, wind_df):
         pl.col("time").min().alias("min_date"),
         pl.col("time").max().alias("max_date")
     ])
-
     return (joined_df,)
 
 
