@@ -1,0 +1,1 @@
+uv run --with="marimo[mcp]" marimo edit $1 --mcp --no-token --watch
